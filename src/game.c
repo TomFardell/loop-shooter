@@ -20,8 +20,10 @@ typedef struct Constants {
   float enemy_speed_max;
   float enemy_size_min;
   float enemy_size_max;
-  float enemy_interval_min;
-  float enemy_interval_max;
+  float enemy_spawn_interval_min;
+  float enemy_spawn_interval_max;
+  float enemy_update_interval;
+  float enemy_update_chance;  // Chance (each update) that the enemy updates its desired position
   Color enemy_colour;
 } Constants;
 
@@ -42,10 +44,13 @@ typedef struct Enemy {
 
 typedef struct EnemyManager {
   Enemy *enemies;
-  int count;
+  int enemy_count;
   int capacity;
-  float enemy_interval;
-  float time_of_last_enemy;
+
+  float enemy_spawn_interval;
+  float time_of_last_spawn;
+
+  float time_of_last_update;
 } EnemyManager;
 
 // Generate a random float in the given range (inclusive)
@@ -101,18 +106,56 @@ Enemy enemy_generate(Player player, Constants constants) {
 
 void enemy_manager_try_to_spawn_enemy(EnemyManager *enemy_manager, Player player, Constants constants) {
   // If we already have the max number of enemies spawned, do nothing
-  if (enemy_manager->count >= enemy_manager->capacity) return;
+  if (enemy_manager->enemy_count >= enemy_manager->capacity) return;
 
   // If it has not been long enough since the last enemy, do nothing
-  float time_since_last_enemy = GetTime() - enemy_manager->time_of_last_enemy;
-  if (time_since_last_enemy < enemy_manager->enemy_interval) return;
+  float time_since_last_enemy = GetTime() - enemy_manager->time_of_last_spawn;
+  if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
 
-  // Otherwise spawn an enemy
-  enemy_manager->enemies[enemy_manager->count++] = enemy_generate(player, constants);
+  // Otherwise, spawn an enemy
+  enemy_manager->enemies[enemy_manager->enemy_count++] = enemy_generate(player, constants);
 
   // Reset the enemy timer and generate a new interval length
-  enemy_manager->time_of_last_enemy = GetTime();
-  enemy_manager->enemy_interval = get_random_float(constants.enemy_interval_min, constants.enemy_interval_max);
+  enemy_manager->time_of_last_spawn = GetTime();
+  enemy_manager->enemy_spawn_interval =
+      get_random_float(constants.enemy_spawn_interval_min, constants.enemy_spawn_interval_max);
+}
+
+// Every so often, and with probability, update the enemies so that they move towards the player
+void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, Player player, Constants constants) {
+  // If it is not time to update the enemies, do nothing
+  float time_since_last_update = GetTime() - enemy_manager->time_of_last_update;
+  if (time_since_last_update < constants.enemy_update_interval) return;
+
+  // Otherwise, iterate through the enemies and (sometimes) update their desired positions
+  for (int i = 0; i < enemy_manager->enemy_count; i++) {
+    Enemy *this_enemy = enemy_manager->enemies + i;
+    float r_num = get_random_float(0, 1);
+    if (r_num <= constants.enemy_update_chance) {
+      this_enemy->desired_pos = player.pos;  // Enemy will now move towards the current position of the player
+    }
+  }
+}
+
+void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
+  for (int i = 0; i < enemy_manager->enemy_count; i++) {
+    Enemy *this_enemy = enemy_manager->enemies + i;
+
+    // Move the enemy towards the player according to its speed
+    Vector2 normalised_move_direction =
+        Vector2Normalize(Vector2Subtract(this_enemy->desired_pos, this_enemy->pos));
+    this_enemy->pos =
+        Vector2Add(this_enemy->pos, Vector2Scale(normalised_move_direction, this_enemy->speed * GetFrameTime()));
+  }
+}
+
+void draw_player(Player player) { DrawCircleV(player.pos, player.size, player.colour); }
+
+void draw_enemies(EnemyManager enemy_manager) {
+  for (int i = 0; i < enemy_manager.enemy_count; i++) {
+    Enemy this_enemy = enemy_manager.enemies[i];
+    DrawCircleV(this_enemy.pos, this_enemy.size, this_enemy.colour);
+  }
 }
 
 int main() {
@@ -133,8 +176,10 @@ int main() {
                                .enemy_speed_max = 250,
                                .enemy_size_min = 15,
                                .enemy_size_max = 40,
-                               .enemy_interval_min = 1.0,
-                               .enemy_interval_max = 1.5,
+                               .enemy_spawn_interval_min = 1.0,
+                               .enemy_spawn_interval_max = 1.5,
+                               .enemy_update_interval = 0.2,
+                               .enemy_update_chance = 0.02,
                                .enemy_colour = RED};
 
   InitWindow(constants.screen_width, constants.screen_height, "Test game");
@@ -145,12 +190,12 @@ int main() {
                    .speed = constants.player_base_speed,
                    .colour = constants.player_colour};
 
-  EnemyManager enemy_manager = {
-      .enemies = calloc(constants.max_enemies, sizeof *(enemy_manager.enemies)),
-      .count = 0,
-      .capacity = constants.max_enemies,
-      .enemy_interval = get_random_float(constants.enemy_interval_min, constants.enemy_interval_max),
-      .time_of_last_enemy = GetTime()};
+  EnemyManager enemy_manager = {.enemies = calloc(constants.max_enemies, sizeof *(enemy_manager.enemies)),
+                                .enemy_count = 0,
+                                .capacity = constants.max_enemies,
+                                .enemy_spawn_interval = get_random_float(constants.enemy_spawn_interval_min,
+                                                                         constants.enemy_spawn_interval_max),
+                                .time_of_last_spawn = GetTime()};
   /*-------------------------------------------------------------------------------------------------------------*/
 
   while (!WindowShouldClose()) {
@@ -158,13 +203,10 @@ int main() {
     /* Update */
     /*-----------------------------------------------------------------------------------------------------------*/
     player_update_position(&player, constants);
-    enemy_manager_try_to_spawn_enemy(&enemy_manager, player, constants);
 
-    for (int i = 0; i < enemy_manager.count; i++) {
-      Enemy this_enemy = enemy_manager.enemies[i];
-      printf("(enemy %d: pos=[%f %f] spd=%f, sze=%f)\n", i, this_enemy.pos.x, this_enemy.pos.y, this_enemy.speed,
-             this_enemy.size);
-    }
+    enemy_manager_try_to_spawn_enemy(&enemy_manager, player, constants);
+    enemy_manager_update_desired_positions(&enemy_manager, player, constants);
+    enemy_manager_update_enemy_positions(&enemy_manager);
     /*-----------------------------------------------------------------------------------------------------------*/
 
     /*---------*/
@@ -174,7 +216,8 @@ int main() {
     {
       ClearBackground(RAYWHITE);
 
-      DrawCircleV(player.pos, player.size, player.colour);
+      draw_player(player);
+      draw_enemies(enemy_manager);
     }
     EndDrawing();
     /*-----------------------------------------------------------------------------------------------------------*/
