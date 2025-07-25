@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <assert.h>
 #include "raylib.h"
 #include "raymath.h"
 
@@ -29,6 +30,7 @@ typedef struct Constants {
 
 typedef struct Player {
   Vector2 pos;
+
   float speed;
   float size;
   Color colour;
@@ -37,6 +39,8 @@ typedef struct Player {
 typedef struct Enemy {
   Vector2 pos;
   Vector2 desired_pos;
+  bool is_active;
+
   float speed;
   float size;
   Color colour;
@@ -97,6 +101,7 @@ Vector2 enemy_get_random_start_pos(float enemy_size, Constants constants) {
 Enemy enemy_generate(Player player, Constants constants) {
   Enemy enemy = {.desired_pos = player.pos, .colour = constants.enemy_colour};
 
+  enemy.is_active = true;
   enemy.speed = get_random_float(constants.enemy_speed_min, constants.enemy_speed_max);
   enemy.size = get_random_float(constants.enemy_size_min, constants.enemy_size_max);
   enemy.pos = enemy_get_random_start_pos(enemy.size, constants);
@@ -112,8 +117,18 @@ void enemy_manager_try_to_spawn_enemy(EnemyManager *enemy_manager, Player player
   float time_since_last_enemy = GetTime() - enemy_manager->time_of_last_spawn;
   if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
 
-  // Otherwise, spawn an enemy
-  enemy_manager->enemies[enemy_manager->enemy_count++] = enemy_generate(player, constants);
+  // Loop through the enemy slots until an inactive enemy is found. Note that since the enemy array was initialised
+  // to zero, by default all the slots contain inactive enemies
+  for (int i = 0; i < enemy_manager->capacity; i++) {
+    if (!enemy_manager->enemies[i].is_active) {
+      enemy_manager->enemies[i] = enemy_generate(player, constants);
+      enemy_manager->enemy_count++;
+      break;
+    }
+
+    // Check that the loop did actually find an inactive enemy
+    assert((i != enemy_manager->capacity - 1) && "No enemy spawned despite space being available");
+  }
 
   // Reset the enemy timer and generate a new interval length
   enemy_manager->time_of_last_spawn = GetTime();
@@ -128,8 +143,10 @@ void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, Player 
   if (time_since_last_update < constants.enemy_update_interval) return;
 
   // Otherwise, iterate through the enemies and (sometimes) update their desired positions
-  for (int i = 0; i < enemy_manager->enemy_count; i++) {
+  for (int i = 0; i < enemy_manager->capacity; i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
+    if (!this_enemy->is_active) continue;
+
     float r_num = get_random_float(0, 1);
     if (r_num <= constants.enemy_update_chance) {
       this_enemy->desired_pos = player.pos;  // Enemy will now move towards the current position of the player
@@ -138,8 +155,9 @@ void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, Player 
 }
 
 void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
-  for (int i = 0; i < enemy_manager->enemy_count; i++) {
+  for (int i = 0; i < enemy_manager->capacity; i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
+    if (!this_enemy->is_active) continue;
 
     // Move the enemy towards the player according to its speed
     Vector2 normalised_move_direction =
@@ -152,8 +170,10 @@ void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
 void draw_player(Player player) { DrawCircleV(player.pos, player.size, player.colour); }
 
 void draw_enemies(EnemyManager enemy_manager) {
-  for (int i = 0; i < enemy_manager.enemy_count; i++) {
+  for (int i = 0; i < enemy_manager.capacity; i++) {
     Enemy this_enemy = enemy_manager.enemies[i];
+    if (!this_enemy.is_active) continue;
+
     DrawCircleV(this_enemy.pos, this_enemy.size, this_enemy.colour);
   }
 }
