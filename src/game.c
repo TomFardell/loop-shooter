@@ -283,6 +283,28 @@ void projectile_manager_update_projectile_positions(ProjectileManager *projectil
   }
 }
 
+void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *projectile_manager,
+                                                          EnemyManager *enemy_manager) {
+  for (int i = 0; i < projectile_manager->capacity; i++) {
+    Projectile *this_projectile = projectile_manager->projectiles + i;
+    if (!this_projectile->is_active) continue;
+
+    for (int j = 0; j < enemy_manager->capacity; j++) {
+      Enemy *this_enemy = enemy_manager->enemies + j;
+      if (!this_enemy->is_active) continue;
+
+      if (!CheckCollisionCircles(this_projectile->pos, this_projectile->size, this_enemy->pos, this_enemy->size))
+        continue;
+
+      this_projectile->is_active = false;
+      projectile_manager->projectile_count--;
+
+      this_enemy->is_active = false;
+      enemy_manager->enemy_count--;
+    }
+  }
+}
+
 // Draw the player to the canvas
 void draw_player(Player player) { DrawCircleV(player.pos, player.size, player.colour); }
 
@@ -373,6 +395,7 @@ int main() {
     player_update_position(&player, constants);
 
     player_try_to_spawn_projectile(&player, &projectile_manager);
+    projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager);
     projectile_manager_update_projectile_positions(&projectile_manager, constants);
 
     enemy_manager_try_to_spawn_enemy(&enemy_manager, player, constants);
@@ -401,6 +424,7 @@ int main() {
   CloseWindow();
 
   free(enemy_manager.enemies);
+  free(projectile_manager.projectiles);
   /*-------------------------------------------------------------------------------------------------------------*/
 
   return EXIT_SUCCESS;
