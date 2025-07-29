@@ -49,13 +49,14 @@ typedef struct Player {
   float speed;   // Speed of the player's movement
   float size;    // Radius of the player circle
   Color colour;  // Colour of the player
+  int score;     // Score of the player in this game loop
 
   float projectile_fire_interval;  // Time between the player's shots (i.e. inverse of firerate)
   float projectile_speed;          // Speed at which the player's projectiles travel
   float projectile_size;           // Radius of the player's projectile circles
   Color projectile_colour;         // Colour of the player's projectiles
+  float time_of_last_projectile;   // Number of seconds since the last projectile was fired
 
-  float time_of_last_projectile;  // Number of seconds since the last projectile was fired
 } Player;
 
 typedef struct Enemy {
@@ -133,6 +134,7 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
 
   *game_screen = GAME_SCREEN_GAME;
 
+  *player = (Player){0};
   player->pos = constants->player_start_pos;
   player->speed = constants->player_base_speed;
   player->size = constants->player_base_size;
@@ -143,6 +145,7 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
   player->projectile_colour = constants->player_projectile_colour;
   player->time_of_last_projectile = start_time;
 
+  *enemy_manager = (EnemyManager){0};
   enemy_manager->enemies = calloc(constants->max_enemies, sizeof *(enemy_manager->enemies));
   enemy_manager->enemy_count = 0;
   enemy_manager->capacity = constants->max_enemies;
@@ -151,6 +154,7 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
   enemy_manager->time_of_last_spawn = start_time;
   enemy_manager->time_of_last_update = start_time;
 
+  *projectile_manager = (ProjectileManager){0};
   projectile_manager->projectiles = calloc(constants->max_projectiles, sizeof *(projectile_manager->projectiles)),
   projectile_manager->projectile_count = 0;
   projectile_manager->capacity = constants->max_projectiles;
@@ -165,11 +169,6 @@ void end_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_manag
   enemy_manager->enemies = NULL;
   free(projectile_manager->projectiles);
   projectile_manager->projectiles = NULL;
-
-  // Clear memory associated with game objects
-  *player = (Player){0};
-  *enemy_manager = (EnemyManager){0};
-  *projectile_manager = (ProjectileManager){0};
 }
 
 // Get the normalised vector for the direction the player should move according to keyboard input
@@ -285,7 +284,7 @@ void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
 }
 
 // Get whether an enemy is currently colliding with the player
-bool enemy_manager_check_for_collisions_with_player(EnemyManager *enemy_manager, Player *player) {
+bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, Player *player) {
   for (int i = 0; i < enemy_manager->capacity; i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
     if (!this_enemy->is_active) continue;
@@ -374,7 +373,7 @@ void projectile_manager_update_projectile_positions(ProjectileManager *projectil
 
 // Check whether any projectile is collided with an enemy, destroying both if this is the case
 void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *projectile_manager,
-                                                          EnemyManager *enemy_manager) {
+                                                          EnemyManager *enemy_manager, Player *player) {
   for (int i = 0; i < projectile_manager->capacity; i++) {
     Projectile *this_projectile = projectile_manager->projectiles + i;
     if (!this_projectile->is_active) continue;
@@ -391,6 +390,8 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
 
       this_enemy->is_active = false;
       enemy_manager->enemy_count--;
+
+      player->score++;
     }
   }
 }
@@ -480,7 +481,7 @@ int main() {
                          .player_base_projectile_size = 7,
                          .player_projectile_colour = DARKGRAY,
 
-                         .max_enemies = 10,
+                         .max_enemies = 100,
                          .enemy_speed_min = 150,
                          .enemy_speed_max = 250,
                          .enemy_size_min = 15,
@@ -495,7 +496,7 @@ int main() {
 
                          .font_spacing = 2};
 
-  InitWindow(constants.screen_width, constants.screen_height, "Test game");
+  InitWindow(constants.screen_width, constants.screen_height, "Shooter Game");
   SetTargetFPS(constants.target_fps);
 
   constants.game_font = GetFontDefault();  // Needs to come after window initialisation
@@ -518,9 +519,9 @@ int main() {
   go_back_button.bounds.y += 200;
   go_back_button.text = "GO BACK";
 
-  Player player = {0};
-  EnemyManager enemy_manager = {0};
-  ProjectileManager projectile_manager = {0};
+  Player player;
+  EnemyManager enemy_manager;
+  ProjectileManager projectile_manager;
 
   GameScreen game_screen = GAME_SCREEN_START;
 
@@ -545,14 +546,14 @@ int main() {
         player_update_position(&player, &constants);
 
         player_try_to_spawn_projectile(&player, &projectile_manager);
-        projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager);
+        projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager, &player);
         projectile_manager_update_projectile_positions(&projectile_manager, &constants);
 
         enemy_manager_try_to_spawn_enemy(&enemy_manager, player, &constants);
         enemy_manager_update_desired_positions(&enemy_manager, player, &constants);
         enemy_manager_update_enemy_positions(&enemy_manager);
 
-        if (enemy_manager_check_for_collisions_with_player(&enemy_manager, &player)) {
+        if (enemy_manager_enemy_is_colliding_with_player(&enemy_manager, &player)) {
           end_game(&game_screen, &player, &enemy_manager, &projectile_manager);
 
           go_back_button.is_active = true;
@@ -588,9 +589,15 @@ int main() {
           draw_projectiles(projectile_manager);
           draw_enemies(enemy_manager);
           draw_player(player);
+          DrawTextEx(constants.game_font, TextFormat("Score: %d", player.score), (Vector2){20, 20}, 30,
+                     constants.font_spacing, BLACK);
           break;
 
         case GAME_SCREEN_END:
+          draw_text_centred(constants.game_font, "GAME OVER", (Vector2){0.5 * constants.screen_width, 200}, 50,
+                            constants.font_spacing, MAROON);
+          draw_text_centred(constants.game_font, TextFormat("Score: %d", player.score),
+                            (Vector2){0.5 * constants.screen_width, 270}, 40, constants.font_spacing, BLACK);
           draw_button(go_back_button, &constants);
           break;
       }
