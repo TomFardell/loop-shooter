@@ -27,15 +27,13 @@ typedef struct Constants {
   Color player_projectile_colour;              // Colour of the player's projectiles
 
   int max_enemies;                 // Maximum number of enemies. Enemies stop spawning when this is reached
-  float enemy_speed_min;           // Minimum speed of an enemy
-  float enemy_speed_max;           // Maximum speed of an enemy
-  float enemy_size_min;            // Minimum radius of an enemy circle
-  float enemy_size_max;            // Maximum radius of an enemy circle
   float enemy_spawn_interval_min;  // Minimum time between enemy spawns
   float enemy_spawn_interval_max;  // Maximum time between enemy spawns
   float enemy_update_interval;     // Time interval between attempts at updating the enemy's desired position
   float enemy_update_chance;       // Chance (each update) that the enemy updates its desired position
-  Color enemy_colour;              // Colour of the enemy cirlces
+  int num_enemy_types;             // How many different types of enemies are in existence
+  float base_credit_rate;          // Starting rate at which enemy manager credits accumulate (per second)
+  float base_credit_rate_rate;     // Starting 'acceleration' of enemy manager credit accumulation
 
   int max_projectiles;  // Maximum number of projectiles. This number should not be reached
 
@@ -59,14 +57,25 @@ typedef struct Player {
 
 } Player;
 
+typedef struct EnemyType {
+  float credit_cost;                   // Number of enemy manager credits this enemy type costs
+  float min_speed;                     // Minimum speed of this type of enemy
+  float max_speed;                     // Maximum speed of this type of enemy
+  float min_size;                      // Minimum size of this type of enemy
+  float max_size;                      // Maximum size of this type of enemy
+  Color colour;                        // Colour of this type of enemy
+  const struct EnemyType *turns_into;  // Pointer to the type of enemy that this enemy turns into upon death
+} EnemyType;
+
 typedef struct Enemy {
   Vector2 pos;          // Current position of the enemy
   Vector2 desired_pos;  // Position that the enemy will try to move towards
   bool is_active;       // Whether the enemy is processed and drawn
 
-  float speed;   // Speed at which the enemy moves (towards its desired position)
-  float size;    // Radius of the enemy circle
-  Color colour;  // Colour of the enemy circle
+  float speed;  // Speed at which the enemy moves (towards its desired position)
+  float size;   // Radius of the enemy circle
+
+  const EnemyType *type;  // Enemy type of this enemy
 } Enemy;
 
 typedef struct EnemyManager {
@@ -76,6 +85,9 @@ typedef struct EnemyManager {
 
   float enemy_spawn_interval;  // Number of seconds between spawns of enemies
   float time_of_last_spawn;    // Time of the last enemy spawn (in seconds since the start of the game)
+  float credits;               // Number of credits, which the enemy manager uses to 'buy' enemies to spawn
+  float credit_rate;           // Number of credits that are accumulated per second
+  float credit_rate_rate;      // 'Acceleration' of the number of credits
 
   float time_of_last_update;  // Time of the last update of enemy positions
 } EnemyManager;
@@ -152,6 +164,9 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
   enemy_manager->enemy_spawn_interval =
       get_random_float(constants->enemy_spawn_interval_min, constants->enemy_spawn_interval_max);
   enemy_manager->time_of_last_spawn = start_time;
+  enemy_manager->credit_rate = constants->base_credit_rate;
+  enemy_manager->credit_rate_rate = constants->base_credit_rate_rate;
+
   enemy_manager->time_of_last_update = start_time;
 
   *projectile_manager = (ProjectileManager){0};
@@ -208,12 +223,12 @@ Vector2 enemy_get_random_start_pos(float enemy_size, const Constants *constants)
 }
 
 // Randomly generate a new enemy
-Enemy enemy_generate(Player player, const Constants *constants) {
+Enemy enemy_generate(const EnemyType *enemy_type, Player player, const Constants *constants) {
   Enemy enemy = {.desired_pos = player.pos,
                  .is_active = true,
-                 .speed = get_random_float(constants->enemy_speed_min, constants->enemy_speed_max),
-                 .size = get_random_float(constants->enemy_size_min, constants->enemy_size_max),
-                 .colour = constants->enemy_colour};
+                 .speed = get_random_float(enemy_type->min_speed, enemy_type->max_speed),
+                 .size = get_random_float(enemy_type->min_size, enemy_type->max_size),
+                 .type = enemy_type};
 
   enemy.pos = enemy_get_random_start_pos(enemy.size, constants);
 
@@ -221,27 +236,37 @@ Enemy enemy_generate(Player player, const Constants *constants) {
 }
 
 // Try to create and spawn a new enemy (if it is time to do so)
-void enemy_manager_try_to_spawn_enemy(EnemyManager *enemy_manager, Player player, const Constants *constants) {
-  // If we already have the max number of enemies spawned, do nothing
-  if (enemy_manager->enemy_count >= enemy_manager->capacity) return;
-
+void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const EnemyType *enemy_types, Player player,
+                                        const Constants *constants) {
   // If it has not been long enough since the last enemy, do nothing
   float time_since_last_enemy = GetTime() - enemy_manager->time_of_last_spawn;
   if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
 
-  // Loop through the enemy slots until an inactive enemy is found. Note that since the enemy array was initialised
-  // to zero, by default all the slots contain inactive enemies
-  for (int i = 0; i < enemy_manager->capacity; i++) {
-    if (!enemy_manager->enemies[i].is_active) {
-      enemy_manager->enemies[i] = enemy_generate(player, constants);
-      enemy_manager->enemy_count++;
-      break;
-    }
+  while (enemy_manager->enemy_count < enemy_manager->capacity) {
+    // Calculate the maximum affordable enemy type index for the current credit balance of the enemy manager
+    int max_i = -1;
+    while (max_i < constants->num_enemy_types && enemy_types[max_i].credit_cost <= enemy_manager->credits) max_i++;
+
+    if (max_i == -1) break;  // If no enemy types are affordable, stop trying to spawn enemies
+
+    // Randomly select an affordable enemy type to be spawned
+    const EnemyType *type_chosen = enemy_types + GetRandomValue(0, max_i);
+
+    // Loop through the enemy slots until an inactive enemy is found. Note that since the enemy array was
+    // initialised to zero, by default all the slots contain inactive enemies
+    for (int i = 0; i < enemy_manager->capacity; i++) {
+      if (!enemy_manager->enemies[i].is_active) {
+        enemy_manager->enemies[i] = enemy_generate(type_chosen, player, constants);
+        enemy_manager->enemy_count++;
+        enemy_manager->credits -= type_chosen->credit_cost;
+        break;
+      }
 
 #if DEBUG
-    // Check that the loop doesn't terminate without finding an inactive enemy (this is the final i)
-    assert((i != enemy_manager->capacity - 1) && "No inactive enemy found");
+      // Check that the loop doesn't terminate without finding an inactive enemy (this is the final i)
+      assert((i != enemy_manager->capacity - 1) && "No inactive enemy found");
 #endif
+    }
   }
 
   // Reset the enemy timer and generate a new interval length
@@ -297,6 +322,11 @@ bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, P
   }
 
   return false;
+}
+
+void enemy_manager_increment_credits(EnemyManager *enemy_manager) {
+  enemy_manager->credit_rate += enemy_manager->credit_rate_rate * GetFrameTime();
+  enemy_manager->credits += enemy_manager->credit_rate * GetFrameTime();
 }
 
 // Generate a new projectile that moves towards the mouse
@@ -388,8 +418,14 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
       this_projectile->is_active = false;
       projectile_manager->projectile_count--;
 
-      this_enemy->is_active = false;
-      enemy_manager->enemy_count--;
+      // If we are not at the base enemy type, decay into the next type in the chain
+      if (this_enemy->type->turns_into) {
+        this_enemy->type = this_enemy->type->turns_into;
+        this_enemy->speed = get_random_float(this_enemy->type->min_speed, this_enemy->type->max_speed);
+      } else {  // Otherwise destroy the enemy
+        this_enemy->is_active = false;
+        enemy_manager->enemy_count--;
+      }
 
       player->score++;
     }
@@ -421,7 +457,7 @@ void draw_enemies(EnemyManager enemy_manager) {
     Enemy this_enemy = enemy_manager.enemies[i];
     if (!this_enemy.is_active) continue;
 
-    DrawCircleV(this_enemy.pos, this_enemy.size, this_enemy.colour);
+    DrawCircleV(this_enemy.pos, this_enemy.size, this_enemy.type->colour);
   }
 }
 
@@ -482,19 +518,39 @@ int main() {
                          .player_projectile_colour = DARKGRAY,
 
                          .max_enemies = 100,
-                         .enemy_speed_min = 150,
-                         .enemy_speed_max = 250,
-                         .enemy_size_min = 15,
-                         .enemy_size_max = 40,
                          .enemy_spawn_interval_min = 1.0,
                          .enemy_spawn_interval_max = 1.5,
                          .enemy_update_interval = 0.2,
                          .enemy_update_chance = 0.02,
-                         .enemy_colour = RED,
+                         .num_enemy_types = 3,
+                         .base_credit_rate = 1,
+                         .base_credit_rate_rate = 0.2,
 
                          .max_projectiles = 40,
 
                          .font_spacing = 2};
+
+  const EnemyType enemy_types[] = {{.credit_cost = 1,
+                                    .min_speed = 100,
+                                    .max_speed = 140,
+                                    .min_size = 20,
+                                    .max_size = 30,
+                                    .colour = RED,
+                                    .turns_into = NULL},
+                                   {.credit_cost = 3,
+                                    .min_speed = 160,
+                                    .max_speed = 200,
+                                    .min_size = 25,
+                                    .max_size = 35,
+                                    .colour = SKYBLUE,
+                                    .turns_into = enemy_types + 0},
+                                   {.credit_cost = 7,
+                                    .min_speed = 200,
+                                    .max_speed = 240,
+                                    .min_size = 30,
+                                    .max_size = 40,
+                                    .colour = LIME,
+                                    .turns_into = enemy_types + 1}};
 
   InitWindow(constants.screen_width, constants.screen_height, "Shooter Game");
   SetTargetFPS(constants.target_fps);
@@ -549,7 +605,8 @@ int main() {
         projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager, &player);
         projectile_manager_update_projectile_positions(&projectile_manager, &constants);
 
-        enemy_manager_try_to_spawn_enemy(&enemy_manager, player, &constants);
+        enemy_manager_increment_credits(&enemy_manager);
+        enemy_manager_try_to_spawn_enemies(&enemy_manager, enemy_types, player, &constants);
         enemy_manager_update_desired_positions(&enemy_manager, player, &constants);
         enemy_manager_update_enemy_positions(&enemy_manager);
 
