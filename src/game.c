@@ -12,101 +12,101 @@ typedef enum GameScreen { GAME_SCREEN_START, GAME_SCREEN_GAME, GAME_SCREEN_END }
 typedef enum ButtonState { BUTTON_STATE_DEFAULT, BUTTON_STATE_HOVER, BUTTON_STATE_PRESSED } ButtonState;
 
 typedef struct Constants {
-  int screen_width;
-  int screen_height;
-  int target_fps;
+  int screen_width;   // Game screen width in pixels
+  int screen_height;  // Game screen height in pixels
+  int target_fps;     // Target frames per second of the game
 
-  Vector2 player_start;
-  float player_base_speed;
-  float player_base_size;
-  Color player_colour;
+  Vector2 player_start_pos;  // Starting position of the player
+  float player_base_speed;   // Initial speed of the player
+  float player_base_size;    // Initial radius of the player circle
+  Color player_colour;       // Colour of the player circle
 
-  float player_base_projectile_fire_interval;
-  float player_base_projectile_speed;
-  float player_base_projectile_size;
-  Color player_projectile_colour;
+  float player_base_projectile_fire_interval;  // Initial time between the player's shots (i.e. inverse firerate)
+  float player_base_projectile_speed;          // Initial speed at which the player's projectiles travel
+  float player_base_projectile_size;           // Initial size of the player's projectiles
+  Color player_projectile_colour;              // Colour of the player's projectiles
 
-  int max_enemies;
-  float enemy_speed_min;
-  float enemy_speed_max;
-  float enemy_size_min;
-  float enemy_size_max;
-  float enemy_spawn_interval_min;
-  float enemy_spawn_interval_max;
-  float enemy_update_interval;  // Time interval between attempts at updating the enemy's desired position
-  float enemy_update_chance;    // Chance (each update) that the enemy updates its desired position
-  Color enemy_colour;
+  int max_enemies;                 // Maximum number of enemies. Enemies stop spawning when this is reached
+  float enemy_speed_min;           // Minimum speed of an enemy
+  float enemy_speed_max;           // Maximum speed of an enemy
+  float enemy_size_min;            // Minimum radius of an enemy circle
+  float enemy_size_max;            // Maximum radius of an enemy circle
+  float enemy_spawn_interval_min;  // Minimum time between enemy spawns
+  float enemy_spawn_interval_max;  // Maximum time between enemy spawns
+  float enemy_update_interval;     // Time interval between attempts at updating the enemy's desired position
+  float enemy_update_chance;       // Chance (each update) that the enemy updates its desired position
+  Color enemy_colour;              // Colour of the enemy cirlces
 
-  int max_projectiles;
+  int max_projectiles;  // Maximum number of projectiles. This number should not be reached
 
-  Font game_font;
-  float font_spacing;
+  Font game_font;      // Font used for in-game text
+  float font_spacing;  // Spacing of the in-game font
 } Constants;
 
 typedef struct Player {
-  Vector2 pos;
+  Vector2 pos;  // Current position of the player
 
-  float speed;
-  float size;
-  Color colour;
+  float speed;   // Speed of the player's movement
+  float size;    // Radius of the player circle
+  Color colour;  // Colour of the player
 
-  float projectile_fire_interval;
-  float projectile_speed;
-  float projectile_size;
-  Color projectile_colour;
+  float projectile_fire_interval;  // Time between the player's shots (i.e. inverse of firerate)
+  float projectile_speed;          // Speed at which the player's projectiles travel
+  float projectile_size;           // Radius of the player's projectile circles
+  Color projectile_colour;         // Colour of the player's projectiles
 
-  float time_of_last_projectile;
+  float time_of_last_projectile;  // Number of seconds since the last projectile was fired
 } Player;
 
 typedef struct Enemy {
-  Vector2 pos;
-  Vector2 desired_pos;
-  bool is_active;
+  Vector2 pos;          // Current position of the enemy
+  Vector2 desired_pos;  // Position that the enemy will try to move towards
+  bool is_active;       // Whether the enemy is processed and drawn
 
-  float speed;
-  float size;
-  Color colour;
+  float speed;   // Speed at which the enemy moves (towards its desired position)
+  float size;    // Radius of the enemy circle
+  Color colour;  // Colour of the enemy circle
 } Enemy;
 
 typedef struct EnemyManager {
-  Enemy *enemies;
-  int enemy_count;
-  int capacity;
+  Enemy *enemies;   // Pointer to array of enemies
+  int enemy_count;  // Number of active enemies in the array
+  int capacity;     // Capacity of the enemy array
 
-  float enemy_spawn_interval;
-  float time_of_last_spawn;
+  float enemy_spawn_interval;  // Number of seconds between spawns of enemies
+  float time_of_last_spawn;    // Time of the last enemy spawn (in seconds since the start of the game)
 
-  float time_of_last_update;
+  float time_of_last_update;  // Time of the last update of enemy positions
 } EnemyManager;
 
 typedef struct Projectile {
-  Vector2 pos;
-  Vector2 dir;  // Should be normalised when set
-  bool is_active;
+  Vector2 pos;     // Current position of the projectile
+  Vector2 dir;     // Movement direction of the projectile. Should always be normalised
+  bool is_active;  // Whether the projectile is processed and drawn
 
-  float speed;
-  float size;
-  Color colour;
+  float speed;   // Speed at which the projectile moves (in its movement direction)
+  float size;    // Radius of the projectile circle
+  Color colour;  // Colour of the projectile circle
 } Projectile;
 
 typedef struct ProjectileManager {
-  Projectile *projectiles;
-  int projectile_count;
-  int capacity;
+  Projectile *projectiles;  // Pointer to array of projectiles
+  int projectile_count;     // Number of active projectiles in the array
+  int capacity;             // Capacity of the projectile array
 } ProjectileManager;
 
 typedef struct Button {
-  Rectangle bounds;
-  char *text;
-  ButtonState state;
-  bool is_active;
-  bool was_pressed;
+  Rectangle bounds;   // Rectangle containing the bounds of the button (for pressing and drawing)
+  char *text;         // Text to display inside the button
+  ButtonState state;  // Pressed/hovered state of the button
+  bool is_active;     // Whether to process and draw the button
+  bool was_pressed;   // Whether the button was pressed and the press action should take place
 
-  Color body_colour_default;
-  Color body_colour_hover;
-  Color body_colour_pressed;
-  Color text_colour;
-  float font_size;
+  Color body_colour_default;  // Colour of the button when not hovered over or pressed
+  Color body_colour_hover;    // Colour of the button when hovered over
+  Color body_colour_pressed;  // Colour of the button when pressed
+  Color text_colour;          // Colour of the text inside the button
+  float font_size;            // Font size of the text inside the button
 } Button;
 
 // Generate a random float in the given range (inclusive)
@@ -121,6 +121,7 @@ bool circle_is_on_screen(Vector2 pos, float rad, const Constants *constants) {
          (-rad <= pos.y && pos.y <= constants->screen_height + rad);
 };
 
+// Get the centre of a given rectangle
 Vector2 get_rectangle_centre(Rectangle rec) {
   return (Vector2){rec.x + 0.5 * rec.width, rec.y + 0.5 * rec.height};
 }
@@ -132,7 +133,7 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
 
   *game_screen = GAME_SCREEN_GAME;
 
-  player->pos = constants->player_start;
+  player->pos = constants->player_start_pos;
   player->speed = constants->player_base_speed;
   player->size = constants->player_base_size;
   player->colour = constants->player_colour;
@@ -155,14 +156,17 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
   projectile_manager->capacity = constants->max_projectiles;
 }
 
-// Clean up game objects when the game ends
+// Clean up game objects and switch screens when the game ends
 void end_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_manager,
               ProjectileManager *projectile_manager) {
   *game_screen = GAME_SCREEN_END;
 
   free(enemy_manager->enemies);
+  enemy_manager->enemies = NULL;
   free(projectile_manager->projectiles);
+  projectile_manager->projectiles = NULL;
 
+  // Clear memory associated with game objects
   *player = (Player){0};
   *enemy_manager = (EnemyManager){0};
   *projectile_manager = (ProjectileManager){0};
@@ -280,6 +284,7 @@ void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
   }
 }
 
+// Get whether an enemy is currently colliding with the player
 bool enemy_manager_check_for_collisions_with_player(EnemyManager *enemy_manager, Player *player) {
   for (int i = 0; i < enemy_manager->capacity; i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
@@ -367,6 +372,7 @@ void projectile_manager_update_projectile_positions(ProjectileManager *projectil
   }
 }
 
+// Check whether any projectile is collided with an enemy, destroying both if this is the case
 void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *projectile_manager,
                                                           EnemyManager *enemy_manager) {
   for (int i = 0; i < projectile_manager->capacity; i++) {
@@ -436,6 +442,7 @@ void draw_text_centred(Font font, const char *text, Vector2 pos, float size, flo
   DrawTextEx(font, text, adjusted_pos, size, spacing, colour);
 }
 
+// Draw a button to the screen with the colour chaning depending on hover/pressed status
 void draw_button(Button button, const Constants *constants) {
   Color body_colour;
   switch (button.state) {
@@ -463,7 +470,7 @@ int main() {
                          .screen_height = 600,
                          .target_fps = 240,
 
-                         .player_start = {400, 300},
+                         .player_start_pos = {400, 300},
                          .player_base_speed = 500,
                          .player_base_size = 20,
                          .player_colour = VIOLET,
