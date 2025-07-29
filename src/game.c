@@ -125,6 +125,49 @@ Vector2 get_rectangle_centre(Rectangle rec) {
   return (Vector2){rec.x + 0.5 * rec.width, rec.y + 0.5 * rec.height};
 }
 
+// Perform initialisation steps for game start
+void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_manager,
+                ProjectileManager *projectile_manager, const Constants *constants) {
+  float start_time = GetTime();
+
+  *game_screen = GAME_SCREEN_GAME;
+
+  player->pos = constants->player_start;
+  player->speed = constants->player_base_speed;
+  player->size = constants->player_base_size;
+  player->colour = constants->player_colour;
+  player->projectile_fire_interval = constants->player_base_projectile_fire_interval;
+  player->projectile_speed = constants->player_base_projectile_speed;
+  player->projectile_size = constants->player_base_projectile_size;
+  player->projectile_colour = constants->player_projectile_colour;
+  player->time_of_last_projectile = start_time;
+
+  enemy_manager->enemies = calloc(constants->max_enemies, sizeof *(enemy_manager->enemies));
+  enemy_manager->enemy_count = 0;
+  enemy_manager->capacity = constants->max_enemies;
+  enemy_manager->enemy_spawn_interval =
+      get_random_float(constants->enemy_spawn_interval_min, constants->enemy_spawn_interval_max);
+  enemy_manager->time_of_last_spawn = start_time;
+  enemy_manager->time_of_last_update = start_time;
+
+  projectile_manager->projectiles = calloc(constants->max_projectiles, sizeof *(projectile_manager->projectiles)),
+  projectile_manager->projectile_count = 0;
+  projectile_manager->capacity = constants->max_projectiles;
+}
+
+// Clean up game objects when the game ends
+void end_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_manager,
+              ProjectileManager *projectile_manager) {
+  *game_screen = GAME_SCREEN_END;
+
+  free(enemy_manager->enemies);
+  free(projectile_manager->projectiles);
+
+  *player = (Player){0};
+  *enemy_manager = (EnemyManager){0};
+  *projectile_manager = (ProjectileManager){0};
+}
+
 // Get the normalised vector for the direction the player should move according to keyboard input
 Vector2 player_get_input_direction() {
   Vector2 res = {0};
@@ -237,6 +280,21 @@ void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
   }
 }
 
+bool enemy_manager_check_for_collisions_with_player(EnemyManager *enemy_manager, Player *player) {
+  for (int i = 0; i < enemy_manager->capacity; i++) {
+    Enemy *this_enemy = enemy_manager->enemies + i;
+    if (!this_enemy->is_active) continue;
+
+    if (!CheckCollisionCircles(this_enemy->pos, this_enemy->size, player->pos, player->size)) continue;
+
+    this_enemy->is_active = false;
+    enemy_manager->enemy_count--;
+    return true;
+  }
+
+  return false;
+}
+
 // Generate a new projectile that moves towards the mouse
 Projectile projectile_generate(Player player) {
   Projectile projectile = {.pos = player.pos,
@@ -347,36 +405,6 @@ void button_check_user_interaction(Button *button) {
   }
 }
 
-// Perform initialisation steps for game start
-void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_manager,
-                ProjectileManager *projectile_manager, const Constants *constants) {
-  float start_time = GetTime();
-
-  *game_screen = GAME_SCREEN_GAME;
-
-  player->pos = constants->player_start;
-  player->speed = constants->player_base_speed;
-  player->size = constants->player_base_size;
-  player->colour = constants->player_colour;
-  player->projectile_fire_interval = constants->player_base_projectile_fire_interval;
-  player->projectile_speed = constants->player_base_projectile_speed;
-  player->projectile_size = constants->player_base_projectile_size;
-  player->projectile_colour = constants->player_projectile_colour;
-  player->time_of_last_projectile = start_time;
-
-  enemy_manager->enemies = calloc(constants->max_enemies, sizeof *(enemy_manager->enemies));
-  enemy_manager->enemy_count = 0;
-  enemy_manager->capacity = constants->max_enemies;
-  enemy_manager->enemy_spawn_interval =
-      get_random_float(constants->enemy_spawn_interval_min, constants->enemy_spawn_interval_max);
-  enemy_manager->time_of_last_spawn = start_time;
-  enemy_manager->time_of_last_update = start_time;
-
-  projectile_manager->projectiles = calloc(constants->max_projectiles, sizeof *(projectile_manager->projectiles)),
-  projectile_manager->projectile_count = 0;
-  projectile_manager->capacity = constants->max_projectiles;
-}
-
 // Draw the player to the canvas
 void draw_player(Player player) { DrawCircleV(player.pos, player.size, player.colour); }
 
@@ -477,9 +505,15 @@ int main() {
                          .text_colour = BLACK,
                          .font_size = 50};
 
-  Player player;
-  EnemyManager enemy_manager;
-  ProjectileManager projectile_manager;
+  // The button in the end screen is mostly identical to the start button
+  Button go_back_button = start_button;
+  go_back_button.is_active = false;
+  go_back_button.bounds.y += 200;
+  go_back_button.text = "GO BACK";
+
+  Player player = {0};
+  EnemyManager enemy_manager = {0};
+  ProjectileManager projectile_manager = {0};
 
   GameScreen game_screen = GAME_SCREEN_START;
 
@@ -492,8 +526,12 @@ int main() {
     switch (game_screen) {
       case GAME_SCREEN_START:
         button_check_user_interaction(&start_button);
-        if (start_button.was_pressed)
+        if (start_button.was_pressed) {
           start_game(&game_screen, &player, &enemy_manager, &projectile_manager, &constants);
+
+          start_button.is_active = false;
+          start_button.was_pressed = false;
+        }
         break;
 
       case GAME_SCREEN_GAME:
@@ -506,9 +544,23 @@ int main() {
         enemy_manager_try_to_spawn_enemy(&enemy_manager, player, &constants);
         enemy_manager_update_desired_positions(&enemy_manager, player, &constants);
         enemy_manager_update_enemy_positions(&enemy_manager);
+
+        if (enemy_manager_check_for_collisions_with_player(&enemy_manager, &player)) {
+          end_game(&game_screen, &player, &enemy_manager, &projectile_manager);
+
+          go_back_button.is_active = true;
+        }
         break;
 
       case GAME_SCREEN_END:
+        button_check_user_interaction(&go_back_button);
+        if (go_back_button.was_pressed) {
+          game_screen = GAME_SCREEN_START;
+
+          go_back_button.is_active = false;
+          go_back_button.was_pressed = false;
+          start_button.is_active = true;
+        }
         break;
     }
     /*-----------------------------------------------------------------------------------------------------------*/
@@ -532,6 +584,7 @@ int main() {
           break;
 
         case GAME_SCREEN_END:
+          draw_button(go_back_button, &constants);
           break;
       }
     }
@@ -544,8 +597,7 @@ int main() {
   /*-------------------------------------------------------------------------------------------------------------*/
   CloseWindow();
 
-  free(enemy_manager.enemies);
-  free(projectile_manager.projectiles);
+  end_game(&game_screen, &player, &enemy_manager, &projectile_manager);
   /*-------------------------------------------------------------------------------------------------------------*/
 
   return EXIT_SUCCESS;
