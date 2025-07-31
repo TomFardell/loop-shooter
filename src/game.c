@@ -245,7 +245,8 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
   while (enemy_manager->enemy_count < enemy_manager->capacity) {
     // Calculate the maximum affordable enemy type index for the current credit balance of the enemy manager
     int max_i = -1;
-    while (max_i < constants->num_enemy_types && enemy_types[max_i].credit_cost <= enemy_manager->credits) max_i++;
+    while (max_i < constants->num_enemy_types - 1 && enemy_types[max_i].credit_cost <= enemy_manager->credits)
+      max_i++;
 
     if (max_i == -1) break;  // If no enemy types are affordable, stop trying to spawn enemies
 
