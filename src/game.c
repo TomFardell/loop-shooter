@@ -226,8 +226,8 @@ Vector2 enemy_get_random_start_pos(float enemy_size, const Constants *constants)
 }
 
 // Randomly generate a new enemy
-Enemy enemy_generate(const EnemyType *enemy_type, Player player, const Constants *constants) {
-  Enemy enemy = {.desired_pos = player.pos,
+Enemy enemy_generate(const EnemyType *enemy_type, const Player *player, const Constants *constants) {
+  Enemy enemy = {.desired_pos = player->pos,
                  .is_active = true,
                  .speed = get_random_float(enemy_type->min_speed, enemy_type->max_speed),
                  .size = get_random_float(enemy_type->min_size, enemy_type->max_size),
@@ -239,8 +239,8 @@ Enemy enemy_generate(const EnemyType *enemy_type, Player player, const Constants
 }
 
 // Try to create and spawn a new enemy (if it is time to do so)
-void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const EnemyType *enemy_types, Player player,
-                                        const Constants *constants) {
+void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const EnemyType *enemy_types,
+                                        const Player *player, const Constants *constants) {
   // If it has not been long enough since the last enemy, do nothing
   float time_since_last_enemy = GetTime() - enemy_manager->time_of_last_spawn;
   if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
@@ -278,7 +278,7 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
 }
 
 // Update the enemies so that they move towards the player (when it is time to do so and with probability)
-void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, Player player,
+void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, const Player *player,
                                             const Constants *constants) {
   // If it is not time to update the enemies, do nothing
   float time_since_last_update = GetTime() - enemy_manager->time_of_last_update;
@@ -291,7 +291,7 @@ void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, Player 
 
     float r_num = get_random_float(0, 1);
     if (r_num <= constants->enemy_update_chance) {
-      this_enemy->desired_pos = player.pos;  // Enemy will now move towards the current position of the player
+      this_enemy->desired_pos = player->pos;  // Enemy will now move towards the current position of the player
     }
   }
 }
@@ -311,7 +311,7 @@ void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
 }
 
 // Get whether an enemy is currently colliding with the player
-bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, Player *player) {
+bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, const Player *player) {
   for (int i = 0; i < enemy_manager->capacity; i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
     if (!this_enemy->is_active) continue;
@@ -332,20 +332,20 @@ void enemy_manager_increment_credits(EnemyManager *enemy_manager) {
 }
 
 // Generate a new projectile that moves towards the mouse
-Projectile projectile_generate(Player player) {
-  Projectile projectile = {.pos = player.pos,
+Projectile projectile_generate(const Player *player) {
+  Projectile projectile = {.pos = player->pos,
                            .is_active = true,
-                           .speed = player.projectile_speed,
-                           .size = player.projectile_size,
-                           .colour = player.projectile_colour};
+                           .speed = player->projectile_speed,
+                           .size = player->projectile_size,
+                           .colour = player->projectile_colour};
 
   Vector2 mouse_pos = GetMousePosition();
 
   // If the mouse is on the player, just fire in an arbitrary direction, otherwise fire towards the mouse
-  if (Vector2Equals(mouse_pos, player.pos))
+  if (Vector2Equals(mouse_pos, player->pos))
     projectile.dir = (Vector2){1, 0};  // Arbitrarily choose to shoot to the right (normalised manually)
   else
-    projectile.dir = Vector2Normalize(Vector2Subtract(mouse_pos, player.pos));
+    projectile.dir = Vector2Normalize(Vector2Subtract(mouse_pos, player->pos));
 
   return projectile;
 }
@@ -365,7 +365,7 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
 
   for (int i = 0; i < projectile_manager->capacity; i++) {
     if (!projectile_manager->projectiles[i].is_active) {
-      projectile_manager->projectiles[i] = projectile_generate(*player);
+      projectile_manager->projectiles[i] = projectile_generate(player);
       projectile_manager->projectile_count++;
       break;
     }
@@ -444,12 +444,12 @@ void button_check_user_interaction(Button *button) {
 }
 
 // Draw the player to the canvas
-void draw_player(Player player) { DrawCircleV(player.pos, player.size, player.colour); }
+void draw_player(const Player *player) { DrawCircleV(player->pos, player->size, player->colour); }
 
 // Draw the active enemies to the canvas
-void draw_enemies(EnemyManager enemy_manager) {
-  for (int i = 0; i < enemy_manager.capacity; i++) {
-    Enemy this_enemy = enemy_manager.enemies[i];
+void draw_enemies(const EnemyManager *enemy_manager) {
+  for (int i = 0; i < enemy_manager->capacity; i++) {
+    Enemy this_enemy = enemy_manager->enemies[i];
     if (!this_enemy.is_active) continue;
 
     DrawCircleV(this_enemy.pos, this_enemy.size, this_enemy.type->colour);
@@ -457,9 +457,9 @@ void draw_enemies(EnemyManager enemy_manager) {
 }
 
 // Draw the active projectiles to the canvas
-void draw_projectiles(ProjectileManager projectile_manager) {
-  for (int i = 0; i < projectile_manager.capacity; i++) {
-    Projectile this_projectile = projectile_manager.projectiles[i];
+void draw_projectiles(const ProjectileManager *projectile_manager) {
+  for (int i = 0; i < projectile_manager->capacity; i++) {
+    Projectile this_projectile = projectile_manager->projectiles[i];
     if (!this_projectile.is_active) continue;
 
     DrawCircleV(this_projectile.pos, this_projectile.size, this_projectile.colour);
@@ -475,23 +475,23 @@ void draw_text_centred(Font font, const char *text, Vector2 pos, float size, flo
 }
 
 // Draw a button to the screen with the colour chaning depending on hover/pressed status
-void draw_button(Button button, const Constants *constants) {
+void draw_button(const Button *button, const Constants *constants) {
   Color body_colour;
-  switch (button.state) {
+  switch (button->state) {
     case BUTTON_STATE_DEFAULT:
-      body_colour = button.body_colour_default;
+      body_colour = button->body_colour_default;
       break;
     case BUTTON_STATE_HOVER:
-      body_colour = button.body_colour_hover;
+      body_colour = button->body_colour_hover;
       break;
     case BUTTON_STATE_PRESSED:
-      body_colour = button.body_colour_pressed;
+      body_colour = button->body_colour_pressed;
       break;
   }
 
-  DrawRectangleRec(button.bounds, body_colour);
-  draw_text_centred(constants->game_font, button.text, get_rectangle_centre(button.bounds), button.font_size,
-                    constants->font_spacing, button.text_colour);
+  DrawRectangleRec(button->bounds, body_colour);
+  draw_text_centred(constants->game_font, button->text, get_rectangle_centre(button->bounds), button->font_size,
+                    constants->font_spacing, button->text_colour);
 }
 
 void draw_score_game_info(const Player *player, const EnemyManager *enemy_manager,
@@ -630,8 +630,8 @@ int main() {
         projectile_manager_update_projectile_positions(&projectile_manager, &constants);
 
         enemy_manager_increment_credits(&enemy_manager);
-        enemy_manager_try_to_spawn_enemies(&enemy_manager, enemy_types, player, &constants);
-        enemy_manager_update_desired_positions(&enemy_manager, player, &constants);
+        enemy_manager_try_to_spawn_enemies(&enemy_manager, enemy_types, &player, &constants);
+        enemy_manager_update_desired_positions(&enemy_manager, &player, &constants);
         enemy_manager_update_enemy_positions(&enemy_manager);
 
         if (enemy_manager_enemy_is_colliding_with_player(&enemy_manager, &player)) {
@@ -667,13 +667,13 @@ int main() {
 
       switch (game_screen) {
         case GAME_SCREEN_START:
-          draw_button(start_button, &constants);
+          draw_button(&start_button, &constants);
           break;
 
         case GAME_SCREEN_GAME:
-          draw_projectiles(projectile_manager);
-          draw_enemies(enemy_manager);
-          draw_player(player);
+          draw_projectiles(&projectile_manager);
+          draw_enemies(&enemy_manager);
+          draw_player(&player);
 
           draw_score_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
           break;
@@ -683,7 +683,7 @@ int main() {
                             constants.font_spacing, MAROON);
           draw_text_centred(constants.game_font, TextFormat("Score: %d", player.score),
                             (Vector2){0.5 * constants.screen_width, 270}, 40, constants.font_spacing, BLACK);
-          draw_button(go_back_button, &constants);
+          draw_button(&go_back_button, &constants);
           break;
       }
     }
