@@ -248,8 +248,8 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
   while (enemy_manager->enemy_count < enemy_manager->capacity) {
     // Calculate the maximum affordable enemy type index for the current credit balance of the enemy manager
     int max_i = -1;
-    while (max_i < constants->num_enemy_types - 1 && enemy_types[max_i].credit_cost <= enemy_manager->credits)
-      max_i++;
+    while (max_i < constants->num_enemy_types && enemy_types[max_i].credit_cost <= enemy_manager->credits) max_i++;
+    max_i--;  // We increment max_i one too many times
 
     if (max_i == -1) break;  // If no enemy types are affordable, stop trying to spawn enemies
 
@@ -494,6 +494,30 @@ void draw_button(Button button, const Constants *constants) {
                     constants->font_spacing, button.text_colour);
 }
 
+void draw_score_game_info(const Player *player, const EnemyManager *enemy_manager,
+                          const ProjectileManager *projectile_manager, const Constants *constants,
+                          bool show_debug_text) {
+  DrawTextEx(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){20, 20}, 30,
+             constants->font_spacing, BLACK);
+
+  if (show_debug_text) {
+    DrawTextEx(constants->game_font,
+               TextFormat("Enemy count: %2d/%d", enemy_manager->enemy_count, enemy_manager->capacity),
+               (Vector2){20, 50}, 20, constants->font_spacing, DARKGRAY);
+
+    DrawTextEx(
+        constants->game_font,
+        TextFormat("Projectile count: %2d/%d", projectile_manager->projectile_count, projectile_manager->capacity),
+        (Vector2){20, 70}, 20, constants->font_spacing, DARKGRAY);
+
+    DrawTextEx(constants->game_font, TextFormat("Credits: %5.2f", enemy_manager->credits), (Vector2){20, 90}, 20,
+               constants->font_spacing, DARKGRAY);
+
+    DrawTextEx(constants->game_font, TextFormat("Credit rate: %5.2f", enemy_manager->credit_rate),
+               (Vector2){20, 110}, 20, constants->font_spacing, DARKGRAY);
+  }
+}
+
 int main() {
   /*----------------*/
   /* Initialisation */
@@ -550,9 +574,9 @@ int main() {
   InitWindow(constants.screen_width, constants.screen_height, "Shooter Game");
   SetTargetFPS(constants.target_fps);
 
-#if DEBUG >= 1
-  printf("\n----- Game started with DEBUG = %d -----\n", DEBUG);
-#endif
+  if (DEBUG == 1) {
+    printf("\n----- Game started with DEBUG = %d -----\n", DEBUG);
+  }
 
   constants.game_font = GetFontDefault();  // Needs to come after window initialisation
 
@@ -579,6 +603,7 @@ int main() {
   ProjectileManager projectile_manager;
 
   GameScreen game_screen = GAME_SCREEN_START;
+  bool show_debug_text = false;
 
   /*-------------------------------------------------------------------------------------------------------------*/
 
@@ -614,6 +639,10 @@ int main() {
 
           go_back_button.is_active = true;
         }
+
+        if (IsKeyPressed(KEY_B) && DEBUG >= 1) {
+          show_debug_text = !show_debug_text;
+        }
         break;
 
       case GAME_SCREEN_END:
@@ -645,8 +674,8 @@ int main() {
           draw_projectiles(projectile_manager);
           draw_enemies(enemy_manager);
           draw_player(player);
-          DrawTextEx(constants.game_font, TextFormat("Score: %d", player.score), (Vector2){20, 20}, 30,
-                     constants.font_spacing, BLACK);
+
+          draw_score_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
           break;
 
         case GAME_SCREEN_END:
