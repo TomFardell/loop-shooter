@@ -6,7 +6,10 @@
 #include "raylib.h"
 #include "raymath.h"
 
-#define DEBUG true
+// Makefile can set DEBUG level
+#ifndef DEBUG
+#define DEBUG 0
+#endif
 
 typedef enum GameScreen { GAME_SCREEN_START, GAME_SCREEN_GAME, GAME_SCREEN_END } GameScreen;
 typedef enum ButtonState { BUTTON_STATE_DEFAULT, BUTTON_STATE_HOVER, BUTTON_STATE_PRESSED } ButtonState;
@@ -263,10 +266,8 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
         break;
       }
 
-#if DEBUG
       // Check that the loop doesn't terminate without finding an inactive enemy (this is the final i)
       assert((i != enemy_manager->capacity - 1) && "No inactive enemy found");
-#endif
     }
   }
 
@@ -351,14 +352,9 @@ Projectile projectile_generate(Player player) {
 
 // Spawn a new projectile when it is time to do so and if the correct button is down
 void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager) {
-#if DEBUG
   // The projectile manager should have capacity large enough that it never becomes full
   assert((projectile_manager->projectile_count < projectile_manager->capacity) &&
          "Trying to add projectile to full projectile manager");
-#else
-  // When not in debug mode and the projectile manager is full, just do nothing
-  if (projectile_manager->projectile_count >= projectile_manager->capacity) return;
-#endif
 
   // If the mouse button isn't held, do nothing
   if (!IsMouseButtonDown(MOUSE_LEFT_BUTTON)) return;
@@ -374,10 +370,8 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
       break;
     }
 
-#if DEBUG
     // Check that the loop doesn't terminate without finding an inactive projectile (this is the final i)
     assert((i != projectile_manager->capacity - 1) && "No inactive projectile found");
-#endif
   }
 
   player->time_of_last_projectile = GetTime();
@@ -555,6 +549,10 @@ int main() {
 
   InitWindow(constants.screen_width, constants.screen_height, "Shooter Game");
   SetTargetFPS(constants.target_fps);
+
+#if DEBUG >= 1
+  printf("\n----- Game started with DEBUG = %d -----\n", DEBUG);
+#endif
 
   constants.game_font = GetFontDefault();  // Needs to come after window initialisation
 

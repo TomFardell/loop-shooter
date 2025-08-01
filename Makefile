@@ -8,7 +8,13 @@ FOLDER=src
 GAME_OUT=game.out
 OBJECTS=$(FOLDER)/game.o
 
-default: $(OBJECTS)
+default: build
+
+debug: CFLAGS += -g -DDEBUG=1
+debug: LD_FLAGS += -g -DDEBUG=1
+debug: build
+
+build: $(OBJECTS)
 	$(CC) $(CFLAGS) $(EXTRAFLAGS) -o $(GAME_OUT) $(OBJECTS) $(LD_FLAGS)
 
 clean:
