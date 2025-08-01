@@ -11,7 +11,7 @@
 #define DEBUG 0
 #endif
 
-typedef enum GameScreen { GAME_SCREEN_START, GAME_SCREEN_GAME, GAME_SCREEN_END } GameScreen;
+typedef enum GameScreen { GAME_SCREEN_START, GAME_SCREEN_GAME, GAME_SCREEN_SHOP, GAME_SCREEN_END } GameScreen;
 typedef enum ButtonState { BUTTON_STATE_DEFAULT, BUTTON_STATE_HOVER, BUTTON_STATE_PRESSED } ButtonState;
 
 typedef struct Constants {
@@ -580,23 +580,32 @@ int main() {
 
   constants.game_font = GetFontDefault();  // Needs to come after window initialisation
 
-  Vector2 start_button_dimensions = {250, 100};
-  Button start_button = {.bounds = {0.5 * constants.screen_width - 0.5 * start_button_dimensions.x,
-                                    0.5 * constants.screen_height - 0.5 * start_button_dimensions.y,
-                                    start_button_dimensions.x, start_button_dimensions.y},
-                         .text = "START",
-                         .is_active = true,
-                         .body_colour_default = YELLOW,
-                         .body_colour_hover = GOLD,
-                         .body_colour_pressed = ORANGE,
-                         .text_colour = BLACK,
-                         .font_size = 50};
+  Button button_start_screen_start = {.bounds = {275, 150, 250, 100},
+                                      .text = "START",
+                                      .is_active = true,
+                                      .body_colour_default = YELLOW,
+                                      .body_colour_hover = GOLD,
+                                      .body_colour_pressed = ORANGE,
+                                      .text_colour = BLACK,
+                                      .font_size = 50};
+
+  Button button_start_screen_shop = button_start_screen_start;
+  button_start_screen_shop.bounds.y += 200;
+  button_start_screen_shop.text = "SHOP";
 
   // The button in the end screen is mostly identical to the start button
-  Button go_back_button = start_button;
-  go_back_button.is_active = false;
-  go_back_button.bounds.y += 200;
-  go_back_button.text = "GO BACK";
+  Button button_end_screen_back = button_start_screen_start;
+  button_end_screen_back.is_active = false;
+  button_end_screen_back.bounds.y += 200;
+  button_end_screen_back.text = "GO BACK";
+
+  Button button_shop_screen_back = {.bounds = {40, 510, 100, 50},
+                                    .text = "BACK",
+                                    .body_colour_default = YELLOW,
+                                    .body_colour_hover = GOLD,
+                                    .body_colour_pressed = ORANGE,
+                                    .text_colour = BLACK,
+                                    .font_size = 30};
 
   Player player;
   EnemyManager enemy_manager;
@@ -613,12 +622,23 @@ int main() {
     /*-----------------------------------------------------------------------------------------------------------*/
     switch (game_screen) {
       case GAME_SCREEN_START:
-        button_check_user_interaction(&start_button);
-        if (start_button.was_pressed) {
+        button_check_user_interaction(&button_start_screen_start);
+        if (button_start_screen_start.was_pressed) {
           start_game(&game_screen, &player, &enemy_manager, &projectile_manager, &constants);
 
-          start_button.is_active = false;
-          start_button.was_pressed = false;
+          button_start_screen_start.is_active = false;
+          button_start_screen_start.was_pressed = false;
+        }
+
+        button_check_user_interaction(&button_start_screen_shop);
+        if (button_start_screen_shop.was_pressed) {
+          game_screen = GAME_SCREEN_SHOP;
+
+          button_start_screen_start.is_active = false;
+          button_start_screen_shop.is_active = false;
+          button_start_screen_shop.was_pressed = false;
+
+          button_shop_screen_back.is_active = true;
         }
         break;
 
@@ -637,7 +657,7 @@ int main() {
         if (enemy_manager_enemy_is_colliding_with_player(&enemy_manager, &player)) {
           end_game(&game_screen, &player, &enemy_manager, &projectile_manager);
 
-          go_back_button.is_active = true;
+          button_end_screen_back.is_active = true;
         }
 
         if (IsKeyPressed(KEY_B) && DEBUG >= 1) {
@@ -645,14 +665,27 @@ int main() {
         }
         break;
 
-      case GAME_SCREEN_END:
-        button_check_user_interaction(&go_back_button);
-        if (go_back_button.was_pressed) {
+      case GAME_SCREEN_SHOP:
+        button_check_user_interaction(&button_shop_screen_back);
+        if (button_shop_screen_back.was_pressed) {
           game_screen = GAME_SCREEN_START;
 
-          go_back_button.is_active = false;
-          go_back_button.was_pressed = false;
-          start_button.is_active = true;
+          button_shop_screen_back.is_active = false;
+          button_shop_screen_back.was_pressed = false;
+
+          button_start_screen_start.is_active = true;
+          button_start_screen_shop.is_active = true;
+        }
+        break;
+
+      case GAME_SCREEN_END:
+        button_check_user_interaction(&button_end_screen_back);
+        if (button_end_screen_back.was_pressed) {
+          game_screen = GAME_SCREEN_START;
+
+          button_end_screen_back.is_active = false;
+          button_end_screen_back.was_pressed = false;
+          button_start_screen_start.is_active = true;
         }
         break;
     }
@@ -667,7 +700,8 @@ int main() {
 
       switch (game_screen) {
         case GAME_SCREEN_START:
-          draw_button(&start_button, &constants);
+          draw_button(&button_start_screen_start, &constants);
+          draw_button(&button_start_screen_shop, &constants);
           break;
 
         case GAME_SCREEN_GAME:
@@ -678,12 +712,16 @@ int main() {
           draw_score_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
           break;
 
+        case GAME_SCREEN_SHOP:
+          draw_button(&button_shop_screen_back, &constants);
+          break;
+
         case GAME_SCREEN_END:
           draw_text_centred(constants.game_font, "GAME OVER", (Vector2){0.5 * constants.screen_width, 200}, 50,
                             constants.font_spacing, MAROON);
           draw_text_centred(constants.game_font, TextFormat("Score: %d", player.score),
                             (Vector2){0.5 * constants.screen_width, 270}, 40, constants.font_spacing, BLACK);
-          draw_button(&go_back_button, &constants);
+          draw_button(&button_end_screen_back, &constants);
           break;
       }
     }
@@ -696,6 +734,7 @@ int main() {
   /*-------------------------------------------------------------------------------------------------------------*/
   CloseWindow();
 
+  // In case the player exits from the game screen
   end_game(&game_screen, &player, &enemy_manager, &projectile_manager);
   /*-------------------------------------------------------------------------------------------------------------*/
 
