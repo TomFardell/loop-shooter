@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <math.h>
 #include "raylib.h"
 #include "raymath.h"
 
@@ -24,10 +25,12 @@ typedef struct Constants {
   float player_base_size;    // Initial radius of the player circle
   Color player_colour;       // Colour of the player circle
 
-  float player_base_projectile_fire_interval;  // Initial time between the player's shots (i.e. inverse firerate)
-  float player_base_projectile_speed;          // Initial speed at which the player's projectiles travel
-  float player_base_projectile_size;           // Initial size of the player's projectiles
-  Color player_projectile_colour;              // Colour of the player's projectiles
+  float player_base_firerate;          // Initial firerate of the player's shots (shots per second)
+  float player_base_projectile_speed;  // Initial speed at which the player's projectiles travel
+  float player_base_projectile_size;   // Initial size of the player's projectiles
+  Color player_projectile_colour;      // Colour of the player's projectiles
+
+  float upgrade_cost_multiplier;  // Multiplier applied to the cost of successive upgrades in the shop
 
   int max_enemies;                 // Maximum number of enemies. Enemies stop spawning when this is reached
   float enemy_spawn_interval_min;  // Minimum time between enemy spawns
@@ -52,13 +55,25 @@ typedef struct Player {
   Color colour;  // Colour of the player
   int score;     // Score of the player in this game loop
 
-  float projectile_fire_interval;  // Time between the player's shots (i.e. inverse of firerate)
-  float projectile_speed;          // Speed at which the player's projectiles travel
-  float projectile_size;           // Radius of the player's projectile circles
-  Color projectile_colour;         // Colour of the player's projectiles
-  float time_of_last_projectile;   // Number of seconds since the last projectile was fired
-
+  float firerate;                 // Firerate of the player's shots (shots per second)
+  float projectile_speed;         // Speed at which the player's projectiles travel
+  float projectile_size;          // Radius of the player's projectile circles
+  Color projectile_colour;        // Colour of the player's projectiles
+  float time_of_last_projectile;  // Number of seconds since the last projectile was fired
 } Player;
+
+typedef struct Upgrade {
+  float cost;            // Cost of the next upgrade purchase
+  float stat_increment;  // Increment of the stat being upgraded (as fraction of the base value)
+  float base_stat;       // Base value of the stat being upgraded
+  float *stat;           // Pointer to the stat to adjust
+} Upgrade;
+
+#define NUM_UPGRADES 3
+typedef struct Shop {
+  int money;                       // Amount of money the player has
+  Upgrade upgrades[NUM_UPGRADES];  // Array of upgrades available in the shop
+} Shop;
 
 typedef struct EnemyType {
   float credit_cost;                   // Number of enemy manager credits this enemy type costs
@@ -113,9 +128,8 @@ typedef struct ProjectileManager {
 
 typedef struct Button {
   Rectangle bounds;   // Rectangle containing the bounds of the button (for pressing and drawing)
-  char *text;         // Text to display inside the button
+  const char *text;   // Text to display inside the button
   ButtonState state;  // Pressed/hovered state of the button
-  bool is_active;     // Whether to process and draw the button
   bool was_pressed;   // Whether the button was pressed and the press action should take place
 
   Color body_colour_default;  // Colour of the button when not hovered over or pressed
@@ -142,23 +156,32 @@ Vector2 get_rectangle_centre(Rectangle rec) {
   return (Vector2){rec.x + 0.5 * rec.width, rec.y + 0.5 * rec.height};
 }
 
-// Perform initialisation steps for game start
-void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_manager,
-                ProjectileManager *projectile_manager, const Constants *constants) {
-  float start_time = GetTime();
-
-  *game_screen = GAME_SCREEN_GAME;
-
+// Set the player's stats initially. Should be called once at the start of the program
+void player_initialise(Player *player, const Constants *constants) {
   *player = (Player){0};
-  player->pos = constants->player_start_pos;
   player->speed = constants->player_base_speed;
   player->size = constants->player_base_size;
   player->colour = constants->player_colour;
-  player->projectile_fire_interval = constants->player_base_projectile_fire_interval;
+  player->firerate = constants->player_base_firerate;
   player->projectile_speed = constants->player_base_projectile_speed;
   player->projectile_size = constants->player_base_projectile_size;
   player->projectile_colour = constants->player_projectile_colour;
+}
+
+// Reset the player's stats on game start. Should be called each time the game restarts
+void player_reset(Player *player, const Constants *constants) {
+  float start_time = GetTime();
+
+  player->pos = constants->player_start_pos;
+  player->score = 0;
   player->time_of_last_projectile = start_time;
+}
+
+// Perform initialisation steps for game start
+void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager,
+                const Constants *constants) {
+  float start_time = GetTime();
+  player_reset(player, constants);
 
   *enemy_manager = (EnemyManager){0};
   enemy_manager->enemies = calloc(constants->max_enemies, sizeof *(enemy_manager->enemies));
@@ -169,7 +192,6 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
   enemy_manager->time_of_last_spawn = start_time;
   enemy_manager->credit_rate = constants->base_credit_rate;
   enemy_manager->credit_rate_rate = constants->base_credit_rate_rate;
-
   enemy_manager->time_of_last_update = start_time;
 
   *projectile_manager = (ProjectileManager){0};
@@ -178,15 +200,19 @@ void start_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_man
   projectile_manager->capacity = constants->max_projectiles;
 }
 
-// Clean up game objects and switch screens when the game ends
-void end_game(GameScreen *game_screen, Player *player, EnemyManager *enemy_manager,
-              ProjectileManager *projectile_manager) {
-  *game_screen = GAME_SCREEN_END;
+// Clean up game objects when the game ends
+void end_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager, Shop *shop) {
+  shop->money += player->score;
 
-  free(enemy_manager->enemies);
-  enemy_manager->enemies = NULL;
-  free(projectile_manager->projectiles);
-  projectile_manager->projectiles = NULL;
+  if (enemy_manager->enemies) {
+    free(enemy_manager->enemies);
+    enemy_manager->enemies = NULL;
+  }
+
+  if (projectile_manager->projectiles) {
+    free(projectile_manager->projectiles);
+    projectile_manager->projectiles = NULL;
+  }
 }
 
 // Get the normalised vector for the direction the player should move according to keyboard input
@@ -238,7 +264,7 @@ Enemy enemy_generate(const EnemyType *enemy_type, const Player *player, const Co
   return enemy;
 }
 
-// Try to create and spawn a new enemy (if it is time to do so)
+// Try to create and spawn a new wave of enemies (if it is time to do so)
 void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const EnemyType *enemy_types,
                                         const Player *player, const Constants *constants) {
   // If it has not been long enough since the last enemy, do nothing
@@ -326,6 +352,7 @@ bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, c
   return false;
 }
 
+// Increase the enemy manager's spawning credits (using an acceleration model)
 void enemy_manager_increment_credits(EnemyManager *enemy_manager) {
   enemy_manager->credit_rate += enemy_manager->credit_rate_rate * GetFrameTime();
   enemy_manager->credits += enemy_manager->credit_rate * GetFrameTime();
@@ -361,7 +388,7 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
 
   // If it has not been long enough since the last shot, do nothing
   float time_since_last_projectile = GetTime() - player->time_of_last_projectile;
-  if (time_since_last_projectile < player->projectile_fire_interval) return;
+  if (time_since_last_projectile < 1 / player->firerate) return;
 
   for (int i = 0; i < projectile_manager->capacity; i++) {
     if (!projectile_manager->projectiles[i].is_active) {
@@ -429,8 +456,6 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
 
 // Update the state and clicked status of the button from user input
 void button_check_user_interaction(Button *button) {
-  if (!button->is_active) return;
-
   if (CheckCollisionPointRec(GetMousePosition(), button->bounds)) {
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
       button->state = BUTTON_STATE_PRESSED;
@@ -441,6 +466,15 @@ void button_check_user_interaction(Button *button) {
   } else {
     button->state = BUTTON_STATE_DEFAULT;
   }
+}
+
+void shop_try_to_purchase_upgrade(Shop *shop, Upgrade *upgrade, const Constants *constants) {
+  int rounded_cost = lroundf(upgrade->cost);
+  if (shop->money < rounded_cost) return;
+
+  *(upgrade->stat) += upgrade->stat_increment * upgrade->base_stat;
+  upgrade->cost *= constants->upgrade_cost_multiplier;
+  shop->money -= rounded_cost;
 }
 
 // Draw the player to the canvas
@@ -494,9 +528,10 @@ void draw_button(const Button *button, const Constants *constants) {
                     constants->font_spacing, button->text_colour);
 }
 
-void draw_score_game_info(const Player *player, const EnemyManager *enemy_manager,
-                          const ProjectileManager *projectile_manager, const Constants *constants,
-                          bool show_debug_text) {
+// Draw score (and other stats if debug text button was pressed)
+void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_manager,
+                              const ProjectileManager *projectile_manager, const Constants *constants,
+                              bool show_debug_text) {
   DrawTextEx(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){20, 20}, 30,
              constants->font_spacing, BLACK);
 
@@ -518,6 +553,61 @@ void draw_score_game_info(const Player *player, const EnemyManager *enemy_manage
   }
 }
 
+// Draw the text for the shop page
+void draw_shop_text(const Shop *shop, const Player *player, const Constants *constants) {
+  // Player money should be right justified
+  const char *money_text = TextFormat("$%d", shop->money);
+  Vector2 money_text_size = MeasureTextEx(constants->game_font, money_text, 35, constants->font_spacing);
+
+  DrawTextEx(constants->game_font, money_text, (Vector2){770 - money_text_size.x, 30}, 35, constants->font_spacing,
+             GOLD);
+
+  Upgrade upgrade_firerate = shop->upgrades[0];
+  DrawTextEx(constants->game_font, "Firerate", (Vector2){100, 40}, 30, constants->font_spacing, BLACK);
+  DrawTextEx(constants->game_font,
+             TextFormat("%.1f -> %.1f", player->firerate,
+                        player->firerate + upgrade_firerate.stat_increment * constants->player_base_firerate),
+             (Vector2){100, 70}, 20, constants->font_spacing, DARKBROWN);
+
+  // Projectile speed is displayed at 1/100 scale
+  Upgrade upgrade_projectile_speed = shop->upgrades[1];
+  DrawTextEx(constants->game_font, "Projectile speed", (Vector2){100, 120}, 30, constants->font_spacing, BLACK);
+  DrawTextEx(constants->game_font,
+             TextFormat("%.1f -> %.1f", 0.01 * player->projectile_speed,
+                        0.01 * (player->projectile_speed + upgrade_projectile_speed.stat_increment *
+                                                               constants->player_base_projectile_speed)),
+             (Vector2){100, 150}, 20, constants->font_spacing, DARKBROWN);
+
+  Upgrade upgrade_projectile_size = shop->upgrades[2];
+  DrawTextEx(constants->game_font, "Projectile size", (Vector2){100, 200}, 30, constants->font_spacing, BLACK);
+  DrawTextEx(constants->game_font,
+             TextFormat("%.1f -> %.1f", player->projectile_size,
+                        player->projectile_size +
+                            upgrade_projectile_size.stat_increment * constants->player_base_projectile_size),
+             (Vector2){100, 230}, 20, constants->font_spacing, DARKBROWN);
+}
+
+void draw_shop_purchase_buttons(Button *buttons_shop_purchase, const Shop *shop, const Constants *constants) {
+  Button *button_purchase_firerate = buttons_shop_purchase;
+  Button *button_purchase_projectile_speed = buttons_shop_purchase + 1;
+  Button *button_purchase_projectile_size = buttons_shop_purchase + 2;
+
+  // TextFormat results decay after TextFormat is called 4 times, so need to update this text here
+  Upgrade upgrade_firerate = shop->upgrades[0];
+  button_purchase_firerate->text = TextFormat("$%d", lroundf(upgrade_firerate.cost));
+  draw_button(button_purchase_firerate, constants);
+
+  Upgrade upgrade_projectile_speed = shop->upgrades[1];
+  button_purchase_projectile_speed->text = TextFormat("$%d", lroundf(upgrade_projectile_speed.cost));
+  draw_button(button_purchase_projectile_speed, constants);
+
+  Upgrade upgrade_projectile_size = shop->upgrades[2];
+  button_purchase_projectile_size->text = TextFormat("$%d", lroundf(upgrade_projectile_size.cost));
+  draw_button(button_purchase_projectile_size, constants);
+}
+
+void update_shop_purchase_buttons_text(Button *buttons_shop_purchase, const Shop *shop) {}
+
 int main() {
   /*----------------*/
   /* Initialisation */
@@ -531,10 +621,12 @@ int main() {
                          .player_base_size = 20,
                          .player_colour = VIOLET,
 
-                         .player_base_projectile_fire_interval = 0.2,
-                         .player_base_projectile_speed = 1000,
+                         .player_base_firerate = 2,
+                         .player_base_projectile_speed = 600,
                          .player_base_projectile_size = 7,
                          .player_projectile_colour = DARKGRAY,
+
+                         .upgrade_cost_multiplier = 1.5,
 
                          .max_enemies = 100,
                          .enemy_spawn_interval_min = 1.0,
@@ -582,22 +674,16 @@ int main() {
 
   Button button_start_screen_start = {.bounds = {275, 150, 250, 100},
                                       .text = "START",
-                                      .is_active = true,
                                       .body_colour_default = YELLOW,
                                       .body_colour_hover = GOLD,
                                       .body_colour_pressed = ORANGE,
                                       .text_colour = BLACK,
                                       .font_size = 50};
 
+  // It is convenient for me to create some buttons by simply copying a previous button and changing some values
   Button button_start_screen_shop = button_start_screen_start;
   button_start_screen_shop.bounds.y += 200;
   button_start_screen_shop.text = "SHOP";
-
-  // The button in the end screen is mostly identical to the start button
-  Button button_end_screen_back = button_start_screen_start;
-  button_end_screen_back.is_active = false;
-  button_end_screen_back.bounds.y += 200;
-  button_end_screen_back.text = "GO BACK";
 
   Button button_shop_screen_back = {.bounds = {40, 510, 100, 50},
                                     .text = "BACK",
@@ -607,12 +693,35 @@ int main() {
                                     .text_colour = BLACK,
                                     .font_size = 30};
 
+  // The first purchase button is created manually, and the others are identical but shifted down
+  Button buttons_shop_purchase[NUM_UPGRADES] = {{.bounds = {20, 40, 70, 50},
+                                                 .text = "price",
+                                                 .body_colour_default = GREEN,
+                                                 .body_colour_hover = LIME,
+                                                 .body_colour_pressed = DARKGREEN,
+                                                 .text_colour = BLACK,
+                                                 .font_size = 20}};
+  buttons_shop_purchase[1] = buttons_shop_purchase[0];
+  buttons_shop_purchase[1].bounds.y += 80;
+  buttons_shop_purchase[2] = buttons_shop_purchase[1];
+  buttons_shop_purchase[2].bounds.y += 80;
+
+  Button button_end_screen_back = button_start_screen_start;
+  button_end_screen_back.bounds.y += 200;
+  button_end_screen_back.text = "GO BACK";
+
   Player player;
-  EnemyManager enemy_manager;
-  ProjectileManager projectile_manager;
+  EnemyManager enemy_manager = {0};
+  ProjectileManager projectile_manager = {0};
+
+  Shop shop = {.money = 0,
+               .upgrades = {{100, 0.25, constants.player_base_firerate, &(player.firerate)},
+                            {50, 0.3, constants.player_base_projectile_speed, &(player.projectile_speed)},
+                            {30, 0.2, constants.player_base_projectile_size, &(player.projectile_size)}}};
 
   GameScreen game_screen = GAME_SCREEN_START;
   bool show_debug_text = false;
+  player_initialise(&player, &constants);
 
   /*-------------------------------------------------------------------------------------------------------------*/
 
@@ -624,21 +733,18 @@ int main() {
       case GAME_SCREEN_START:
         button_check_user_interaction(&button_start_screen_start);
         if (button_start_screen_start.was_pressed) {
-          start_game(&game_screen, &player, &enemy_manager, &projectile_manager, &constants);
-
-          button_start_screen_start.is_active = false;
           button_start_screen_start.was_pressed = false;
+
+          game_screen = GAME_SCREEN_GAME;
+          start_game(&player, &enemy_manager, &projectile_manager, &constants);
         }
 
         button_check_user_interaction(&button_start_screen_shop);
         if (button_start_screen_shop.was_pressed) {
-          game_screen = GAME_SCREEN_SHOP;
-
-          button_start_screen_start.is_active = false;
-          button_start_screen_shop.is_active = false;
           button_start_screen_shop.was_pressed = false;
 
-          button_shop_screen_back.is_active = true;
+          game_screen = GAME_SCREEN_SHOP;
+          update_shop_purchase_buttons_text(buttons_shop_purchase, &shop);
         }
         break;
 
@@ -655,9 +761,8 @@ int main() {
         enemy_manager_update_enemy_positions(&enemy_manager);
 
         if (enemy_manager_enemy_is_colliding_with_player(&enemy_manager, &player)) {
-          end_game(&game_screen, &player, &enemy_manager, &projectile_manager);
-
-          button_end_screen_back.is_active = true;
+          end_game(&player, &enemy_manager, &projectile_manager, &shop);
+          game_screen = GAME_SCREEN_END;
         }
 
         if (IsKeyPressed(KEY_B) && DEBUG >= 1) {
@@ -668,24 +773,30 @@ int main() {
       case GAME_SCREEN_SHOP:
         button_check_user_interaction(&button_shop_screen_back);
         if (button_shop_screen_back.was_pressed) {
-          game_screen = GAME_SCREEN_START;
-
-          button_shop_screen_back.is_active = false;
           button_shop_screen_back.was_pressed = false;
 
-          button_start_screen_start.is_active = true;
-          button_start_screen_shop.is_active = true;
+          game_screen = GAME_SCREEN_START;
         }
+
+        for (int i = 0; i < NUM_UPGRADES; i++) {
+          Button *this_purchase_button = buttons_shop_purchase + i;
+          button_check_user_interaction(this_purchase_button);
+          if (this_purchase_button->was_pressed) {
+            this_purchase_button->was_pressed = false;
+
+            shop_try_to_purchase_upgrade(&shop, shop.upgrades + i, &constants);
+          }
+        }
+
+        if (IsKeyPressed(KEY_M) && DEBUG >= 1) shop.money += 1000;
         break;
 
       case GAME_SCREEN_END:
         button_check_user_interaction(&button_end_screen_back);
         if (button_end_screen_back.was_pressed) {
-          game_screen = GAME_SCREEN_START;
-
-          button_end_screen_back.is_active = false;
           button_end_screen_back.was_pressed = false;
-          button_start_screen_start.is_active = true;
+
+          game_screen = GAME_SCREEN_START;
         }
         break;
     }
@@ -709,10 +820,12 @@ int main() {
           draw_enemies(&enemy_manager);
           draw_player(&player);
 
-          draw_score_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
+          draw_score_and_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
           break;
 
         case GAME_SCREEN_SHOP:
+          draw_shop_text(&shop, &player, &constants);
+          draw_shop_purchase_buttons(buttons_shop_purchase, &shop, &constants);
           draw_button(&button_shop_screen_back, &constants);
           break;
 
@@ -735,7 +848,7 @@ int main() {
   CloseWindow();
 
   // In case the player exits from the game screen
-  end_game(&game_screen, &player, &enemy_manager, &projectile_manager);
+  end_game(&player, &enemy_manager, &projectile_manager, &shop);
   /*-------------------------------------------------------------------------------------------------------------*/
 
   return EXIT_SUCCESS;
