@@ -8,7 +8,7 @@ FOLDER=src
 GAME_OUT=game.out
 OBJECTS=$(FOLDER)/game.o
 
-default: build
+release: build
 
 debug: CFLAGS += -g -DDEBUG=1
 debug: LD_FLAGS += -g -DDEBUG=1

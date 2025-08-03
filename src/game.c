@@ -16,6 +16,9 @@
 typedef enum GameScreen { GAME_SCREEN_START, GAME_SCREEN_GAME, GAME_SCREEN_SHOP, GAME_SCREEN_END } GameScreen;
 typedef enum ButtonState { BUTTON_STATE_DEFAULT, BUTTON_STATE_HOVER, BUTTON_STATE_PRESSED } ButtonState;
 
+/*---------*/
+/* Structs */
+/*---------------------------------------------------------------------------------------------------------------*/
 typedef struct Constants {
   int screen_width;   // Game screen width in pixels
   int screen_height;  // Game screen height in pixels
@@ -39,8 +42,8 @@ typedef struct Constants {
   float enemy_update_interval;     // Time interval between attempts at updating the enemy's desired position
   float enemy_update_chance;       // Chance (each update) that the enemy updates its desired position
   int num_enemy_types;             // How many different types of enemies are in existence
-  float base_credit_rate;          // Starting rate at which enemy manager credits accumulate (per second)
-  float base_credit_rate_rate;     // Starting 'acceleration' of enemy manager credit accumulation
+  float enemy_credit_coef1;        // Multiplicative coefficient in enemy credit calculation
+  float enemy_credit_coef2;        // Log coefficient in enemy credit calculation
 
   int max_projectiles;  // Maximum number of projectiles. This number should not be reached
 
@@ -102,11 +105,11 @@ typedef struct EnemyManager {
   int enemy_count;  // Number of active enemies in the array
   int capacity;     // Capacity of the enemy array
 
-  float enemy_spawn_interval;  // Number of seconds between spawns of enemies
-  float time_of_last_spawn;    // Time of the last enemy spawn (in seconds since the start of the game)
-  float credits;               // Number of credits, which the enemy manager uses to 'buy' enemies to spawn
-  float credit_rate;           // Number of credits that are accumulated per second
-  float credit_rate_rate;      // 'Acceleration' of the number of credits
+  float enemy_spawn_interval;    // Number of seconds between spawns of enemies
+  float time_of_last_spawn;      // Time of the last enemy spawn (in seconds since the start of the game)
+  float credits;                 // Number of credits, which the enemy manager uses to 'buy' enemies to spawn
+  float credits_spent;           // Number of credits spent (used in credit calculation)
+  float time_of_initialisation;  // Time of the enemy manager's initialisation (used in credit calculation)
 
   float time_of_last_update;  // Time of the last update of enemy positions
 } EnemyManager;
@@ -139,6 +142,11 @@ typedef struct Button {
   Color text_colour;          // Colour of the text inside the button
   float font_size;            // Font size of the text inside the button
 } Button;
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*-----------*/
+/* Utilities */
+/*---------------------------------------------------------------------------------------------------------------*/
 
 // Generate a random float in the given range (inclusive)
 float get_random_float(float min, float max) {
@@ -156,6 +164,11 @@ bool circle_is_on_screen(Vector2 pos, float rad, const Constants *constants) {
 Vector2 get_rectangle_centre(Rectangle rec) {
   return (Vector2){rec.x + 0.5 * rec.width, rec.y + 0.5 * rec.height};
 }
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*------------*/
+/* Game setup */
+/*---------------------------------------------------------------------------------------------------------------*/
 
 // Set up initial game objects. Should be called once at the start of the program and passed zeroed game objects
 void initialise_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager,
@@ -196,8 +209,9 @@ void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *
   memset(enemy_manager->enemies, 0, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
   enemy_manager->enemy_count = 0;
   enemy_manager->time_of_last_spawn = start_time;
-  enemy_manager->credit_rate = constants->base_credit_rate;
-  enemy_manager->credit_rate_rate = constants->base_credit_rate_rate;
+  enemy_manager->credits = 0;  // Technically doesn't need to be set as we always reset this when spawning enemies
+  enemy_manager->credits_spent = 0;
+  enemy_manager->time_of_initialisation = start_time;
   enemy_manager->time_of_last_update = start_time;
 
   memset(projectile_manager->projectiles, 0,
@@ -218,6 +232,11 @@ void cleanup_game(EnemyManager *enemy_manager, ProjectileManager *projectile_man
   free(projectile_manager->projectiles);
   projectile_manager->projectiles = NULL;
 }
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*----------------*/
+/* Player actions */
+/*---------------------------------------------------------------------------------------------------------------*/
 
 // Get the normalised vector for the direction the player should move according to keyboard input
 Vector2 player_get_input_direction() {
@@ -239,6 +258,65 @@ void player_update_position(Player *player, const Constants *constants) {
   Vector2 min_player_pos = {player->size, player->size};
   Vector2 max_player_pos = {constants->screen_width - player->size, constants->screen_height - player->size};
   player->pos = Vector2Clamp(player->pos, min_player_pos, max_player_pos);
+}
+
+// Generate a new projectile that moves towards the mouse
+Projectile projectile_generate(const Player *player) {
+  Projectile projectile = {.pos = player->pos,
+                           .is_active = true,
+                           .speed = player->projectile_speed,
+                           .size = player->projectile_size,
+                           .colour = player->projectile_colour};
+
+  Vector2 mouse_pos = GetMousePosition();
+
+  // If the mouse is on the player, just fire in an arbitrary direction, otherwise fire towards the mouse
+  if (Vector2Equals(mouse_pos, player->pos))
+    projectile.dir = (Vector2){1, 0};  // Arbitrarily choose to shoot to the right (normalised manually)
+  else
+    projectile.dir = Vector2Normalize(Vector2Subtract(mouse_pos, player->pos));
+
+  return projectile;
+}
+
+// Spawn a new projectile when it is time to do so and if the correct button is down
+void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager) {
+  // The projectile manager should have capacity large enough that it never becomes full
+  assert((projectile_manager->projectile_count < projectile_manager->capacity) &&
+         "Trying to add projectile to full projectile manager");
+
+  // If the mouse button isn't held, do nothing
+  if (!IsMouseButtonDown(MOUSE_LEFT_BUTTON)) return;
+
+  // If it has not been long enough since the last shot, do nothing
+  float time_since_last_projectile = GetTime() - player->time_of_last_projectile;
+  if (time_since_last_projectile < 1 / player->firerate) return;
+
+  for (int i = 0; i < projectile_manager->capacity; i++) {
+    if (!projectile_manager->projectiles[i].is_active) {
+      projectile_manager->projectiles[i] = projectile_generate(player);
+      projectile_manager->projectile_count++;
+      break;
+    }
+
+    // Check that the loop doesn't terminate without finding an inactive projectile (this is the final i)
+    assert((i != projectile_manager->capacity - 1) && "No inactive projectile found");
+  }
+
+  player->time_of_last_projectile = GetTime();
+}
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*------------------*/
+/* Enemy management */
+/*---------------------------------------------------------------------------------------------------------------*/
+
+// Enemy credits, at time t and before spending, are given by: credits = coef1 * t * log(coef2 * t + 1), where
+// coef1 and coef2 are constants defined at game initialisation. Only needs to be called when trying to spawn
+void enemy_manager_update_credits(EnemyManager *enemy_manager, const Constants *constants) {
+  float t = GetTime() - enemy_manager->time_of_initialisation;
+  enemy_manager->credits = constants->enemy_credit_coef1 * t * logf(constants->enemy_credit_coef2 * t + 1) -
+                           enemy_manager->credits_spent;
 }
 
 // Randomly generate a starting position of an enemy. Enemies spawn touching the outside faces of the play area
@@ -276,6 +354,7 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
   if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
 
   while (enemy_manager->enemy_count < enemy_manager->capacity) {
+    enemy_manager_update_credits(enemy_manager, constants);
     // Calculate the maximum affordable enemy type index for the current credit balance of the enemy manager
     int max_i = constants->num_enemy_types - 1;
     while (max_i >= 0) {
@@ -294,7 +373,7 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
       if (!enemy_manager->enemies[i].is_active) {
         enemy_manager->enemies[i] = enemy_generate(type_chosen, player, constants);
         enemy_manager->enemy_count++;
-        enemy_manager->credits -= type_chosen->credit_cost;
+        enemy_manager->credits_spent += type_chosen->credit_cost;
         break;
       }
 
@@ -357,58 +436,11 @@ bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, c
 
   return false;
 }
+/*---------------------------------------------------------------------------------------------------------------*/
 
-// Increase the enemy manager's spawning credits (using an acceleration model)
-void enemy_manager_increment_credits(EnemyManager *enemy_manager) {
-  enemy_manager->credit_rate += enemy_manager->credit_rate_rate * GetFrameTime();
-  enemy_manager->credits += enemy_manager->credit_rate * GetFrameTime();
-}
-
-// Generate a new projectile that moves towards the mouse
-Projectile projectile_generate(const Player *player) {
-  Projectile projectile = {.pos = player->pos,
-                           .is_active = true,
-                           .speed = player->projectile_speed,
-                           .size = player->projectile_size,
-                           .colour = player->projectile_colour};
-
-  Vector2 mouse_pos = GetMousePosition();
-
-  // If the mouse is on the player, just fire in an arbitrary direction, otherwise fire towards the mouse
-  if (Vector2Equals(mouse_pos, player->pos))
-    projectile.dir = (Vector2){1, 0};  // Arbitrarily choose to shoot to the right (normalised manually)
-  else
-    projectile.dir = Vector2Normalize(Vector2Subtract(mouse_pos, player->pos));
-
-  return projectile;
-}
-
-// Spawn a new projectile when it is time to do so and if the correct button is down
-void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager) {
-  // The projectile manager should have capacity large enough that it never becomes full
-  assert((projectile_manager->projectile_count < projectile_manager->capacity) &&
-         "Trying to add projectile to full projectile manager");
-
-  // If the mouse button isn't held, do nothing
-  if (!IsMouseButtonDown(MOUSE_LEFT_BUTTON)) return;
-
-  // If it has not been long enough since the last shot, do nothing
-  float time_since_last_projectile = GetTime() - player->time_of_last_projectile;
-  if (time_since_last_projectile < 1 / player->firerate) return;
-
-  for (int i = 0; i < projectile_manager->capacity; i++) {
-    if (!projectile_manager->projectiles[i].is_active) {
-      projectile_manager->projectiles[i] = projectile_generate(player);
-      projectile_manager->projectile_count++;
-      break;
-    }
-
-    // Check that the loop doesn't terminate without finding an inactive projectile (this is the final i)
-    assert((i != projectile_manager->capacity - 1) && "No inactive projectile found");
-  }
-
-  player->time_of_last_projectile = GetTime();
-}
+/*-----------------------*/
+/* Projectile management */
+/*---------------------------------------------------------------------------------------------------------------*/
 
 // Update projectile positions according to their trajectories
 void projectile_manager_update_projectile_positions(ProjectileManager *projectile_manager,
@@ -459,6 +491,11 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
     }
   }
 }
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*---------------*/
+/* UI processing */
+/*---------------------------------------------------------------------------------------------------------------*/
 
 // Update the state and clicked status of the button from user input
 void button_check_user_interaction(Button *button) {
@@ -474,6 +511,7 @@ void button_check_user_interaction(Button *button) {
   }
 }
 
+// Check if the player can afford a given upgrade, purchasing it if they can
 void shop_try_to_purchase_upgrade(Shop *shop, Upgrade *upgrade, const Constants *constants) {
   int rounded_cost = lroundf(upgrade->cost);
   if (shop->money < rounded_cost) return;
@@ -482,6 +520,11 @@ void shop_try_to_purchase_upgrade(Shop *shop, Upgrade *upgrade, const Constants 
   upgrade->cost *= constants->upgrade_cost_multiplier;
   shop->money -= rounded_cost;
 }
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*---------------------*/
+/* Game object drawing */
+/*---------------------------------------------------------------------------------------------------------------*/
 
 // Draw the player to the canvas
 void draw_player(const Player *player) { DrawCircleV(player->pos, player->size, player->colour); }
@@ -505,6 +548,11 @@ void draw_projectiles(const ProjectileManager *projectile_manager) {
     DrawCircleV(this_projectile.pos, this_projectile.size, this_projectile.colour);
   }
 }
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*------------*/
+/* UI drawing */
+/*---------------------------------------------------------------------------------------------------------------*/
 
 // Same as DrawTextEx, but with the text centred
 void draw_text_centred(Font font, const char *text, Vector2 pos, float size, float spacing, Color colour) {
@@ -553,9 +601,6 @@ void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_ma
 
     DrawTextEx(constants->game_font, TextFormat("Credits: %5.2f", enemy_manager->credits), (Vector2){20, 90}, 20,
                constants->font_spacing, DARKGRAY);
-
-    DrawTextEx(constants->game_font, TextFormat("Credit rate: %5.2f", enemy_manager->credit_rate),
-               (Vector2){20, 110}, 20, constants->font_spacing, DARKGRAY);
   }
 }
 
@@ -593,6 +638,7 @@ void draw_shop_text(const Shop *shop, const Player *player, const Constants *con
              (Vector2){100, 230}, 20, constants->font_spacing, DARKBROWN);
 }
 
+// Update text for and draw purchase buttons in the shop screen
 void draw_shop_purchase_buttons(Button *buttons_shop_purchase, const Shop *shop, const Constants *constants) {
   Button *button_purchase_firerate = buttons_shop_purchase;
   Button *button_purchase_projectile_speed = buttons_shop_purchase + 1;
@@ -611,12 +657,11 @@ void draw_shop_purchase_buttons(Button *buttons_shop_purchase, const Shop *shop,
   button_purchase_projectile_size->text = TextFormat("$%d", lroundf(upgrade_projectile_size.cost));
   draw_button(button_purchase_projectile_size, constants);
 }
-
-void update_shop_purchase_buttons_text(Button *buttons_shop_purchase, const Shop *shop) {}
+/*---------------------------------------------------------------------------------------------------------------*/
 
 int main() {
-  /*----------------*/
-  /* Initialisation */
+  /*--------------------------*/
+  /* Constants initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
   Constants constants = {.screen_width = 800,
                          .screen_height = 600,
@@ -640,8 +685,8 @@ int main() {
                          .enemy_update_interval = 0.2,
                          .enemy_update_chance = 0.02,
                          .num_enemy_types = 3,
-                         .base_credit_rate = 1,
-                         .base_credit_rate_rate = 0.2,
+                         .enemy_credit_coef1 = 0.5,
+                         .enemy_credit_coef2 = 2.0,
 
                          .max_projectiles = 40,
 
@@ -668,6 +713,7 @@ int main() {
                                     .max_size = 40,
                                     .colour = LIME,
                                     .turns_into = enemy_types + 1}};
+  /*-------------------------------------------------------------------------------------------------------------*/
 
   InitWindow(constants.screen_width, constants.screen_height, "Shooter Game");
   SetTargetFPS(constants.target_fps);
@@ -678,6 +724,9 @@ int main() {
 
   constants.game_font = GetFontDefault();  // Needs to come after window initialisation
 
+  /*-------------------*/
+  /* UI initialisation */
+  /*-------------------------------------------------------------------------------------------------------------*/
   Button button_start_screen_start = {.bounds = {275, 150, 250, 100},
                                       .text = "START",
                                       .body_colour_default = YELLOW,
@@ -715,7 +764,11 @@ int main() {
   Button button_end_screen_back = button_start_screen_start;
   button_end_screen_back.bounds.y += 200;
   button_end_screen_back.text = "GO BACK";
+  /*-------------------------------------------------------------------------------------------------------------*/
 
+  /*----------------------------*/
+  /* Game object initialisation */
+  /*-------------------------------------------------------------------------------------------------------------*/
   Player player = {0};
   EnemyManager enemy_manager = {0};
   ProjectileManager projectile_manager = {0};
@@ -725,10 +778,10 @@ int main() {
                             {50, 0.3, constants.player_base_projectile_speed, &(player.projectile_speed)},
                             {30, 0.2, constants.player_base_projectile_size, &(player.projectile_size)}}};
 
-  GameScreen game_screen = GAME_SCREEN_START;
-  bool show_debug_text = false;
   initialise_game(&player, &enemy_manager, &projectile_manager, &constants);
 
+  bool show_debug_text = false;
+  GameScreen game_screen = GAME_SCREEN_START;
   /*-------------------------------------------------------------------------------------------------------------*/
 
   while (!WindowShouldClose()) {
@@ -736,6 +789,9 @@ int main() {
     /* Update */
     /*-----------------------------------------------------------------------------------------------------------*/
     switch (game_screen) {
+      /*---------------------*/
+      /* Start screen update */
+      /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_START:
         button_check_user_interaction(&button_start_screen_start);
         if (button_start_screen_start.was_pressed) {
@@ -750,10 +806,13 @@ int main() {
           button_start_screen_shop.was_pressed = false;
 
           game_screen = GAME_SCREEN_SHOP;
-          update_shop_purchase_buttons_text(buttons_shop_purchase, &shop);
         }
         break;
+      /*---------------------------------------------------------------------------------------------------------*/
 
+      /*--------------------*/
+      /* Game screen update */
+      /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_GAME:
         player_update_position(&player, &constants);
 
@@ -761,7 +820,6 @@ int main() {
         projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager, &player);
         projectile_manager_update_projectile_positions(&projectile_manager, &constants);
 
-        enemy_manager_increment_credits(&enemy_manager);
         enemy_manager_try_to_spawn_enemies(&enemy_manager, enemy_types, &player, &constants);
         enemy_manager_update_desired_positions(&enemy_manager, &player, &constants);
         enemy_manager_update_enemy_positions(&enemy_manager);
@@ -775,7 +833,11 @@ int main() {
           show_debug_text = !show_debug_text;
         }
         break;
+      /*---------------------------------------------------------------------------------------------------------*/
 
+      /*--------------------*/
+      /* Shop screen update */
+      /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_SHOP:
         button_check_user_interaction(&button_shop_screen_back);
         if (button_shop_screen_back.was_pressed) {
@@ -796,7 +858,11 @@ int main() {
 
         if (IsKeyPressed(KEY_M) && DEBUG >= 1) shop.money += 1000;
         break;
+      /*---------------------------------------------------------------------------------------------------------*/
 
+      /*-------------------*/
+      /* End screen update */
+      /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_END:
         button_check_user_interaction(&button_end_screen_back);
         if (button_end_screen_back.was_pressed) {
@@ -805,6 +871,7 @@ int main() {
           game_screen = GAME_SCREEN_START;
         }
         break;
+        /*-------------------------------------------------------------------------------------------------------*/
     }
     /*-----------------------------------------------------------------------------------------------------------*/
 
@@ -816,11 +883,18 @@ int main() {
       ClearBackground(RAYWHITE);
 
       switch (game_screen) {
+        /*-----------------------*/
+        /* Start screen drawing */
+        /*-------------------------------------------------------------------------------------------------------*/
         case GAME_SCREEN_START:
           draw_button(&button_start_screen_start, &constants);
           draw_button(&button_start_screen_shop, &constants);
           break;
+        /*-------------------------------------------------------------------------------------------------------*/
 
+        /*---------------------*/
+        /* Game screen drawing */
+        /*-------------------------------------------------------------------------------------------------------*/
         case GAME_SCREEN_GAME:
           draw_projectiles(&projectile_manager);
           draw_enemies(&enemy_manager);
@@ -828,13 +902,21 @@ int main() {
 
           draw_score_and_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
           break;
+        /*-------------------------------------------------------------------------------------------------------*/
 
+        /*---------------------*/
+        /* Shop screen drawing */
+        /*-------------------------------------------------------------------------------------------------------*/
         case GAME_SCREEN_SHOP:
           draw_shop_text(&shop, &player, &constants);
           draw_shop_purchase_buttons(buttons_shop_purchase, &shop, &constants);
           draw_button(&button_shop_screen_back, &constants);
           break;
+        /*-------------------------------------------------------------------------------------------------------*/
 
+        /*--------------------*/
+        /* End screen drawing */
+        /*-------------------------------------------------------------------------------------------------------*/
         case GAME_SCREEN_END:
           draw_text_centred(constants.game_font, "GAME OVER", (Vector2){0.5 * constants.screen_width, 200}, 50,
                             constants.font_spacing, MAROON);
@@ -842,19 +924,20 @@ int main() {
                             (Vector2){0.5 * constants.screen_width, 270}, 40, constants.font_spacing, BLACK);
           draw_button(&button_end_screen_back, &constants);
           break;
+          /*-----------------------------------------------------------------------------------------------------*/
       }
     }
     EndDrawing();
     /*-----------------------------------------------------------------------------------------------------------*/
   }
 
-  /*-------------------*/
-  /* De-initialisation */
+  /*---------*/
+  /* Cleanup */
   /*-------------------------------------------------------------------------------------------------------------*/
   CloseWindow();
 
   cleanup_game(&enemy_manager, &projectile_manager);
-  /*-------------------------------------------------------------------------------------------------------------*/
 
   return EXIT_SUCCESS;
+  /*-------------------------------------------------------------------------------------------------------------*/
 }
