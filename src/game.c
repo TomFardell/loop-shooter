@@ -107,7 +107,6 @@ typedef struct EnemyManager {
 
   float enemy_spawn_interval;    // Number of seconds between spawns of enemies
   float time_of_last_spawn;      // Time of the last enemy spawn (in seconds since the start of the game)
-  float credits;                 // Number of credits, which the enemy manager uses to 'buy' enemies to spawn
   float credits_spent;           // Number of credits spent (used in credit calculation)
   float time_of_initialisation;  // Time of the enemy manager's initialisation (used in credit calculation)
 
@@ -209,7 +208,6 @@ void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *
   memset(enemy_manager->enemies, 0, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
   enemy_manager->enemy_count = 0;
   enemy_manager->time_of_last_spawn = start_time;
-  enemy_manager->credits = 0;  // Technically doesn't need to be set as we always reset this when spawning enemies
   enemy_manager->credits_spent = 0;
   enemy_manager->time_of_initialisation = start_time;
   enemy_manager->time_of_last_update = start_time;
@@ -311,12 +309,12 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
 /* Enemy management */
 /*---------------------------------------------------------------------------------------------------------------*/
 
-// Enemy credits, at time t and before spending, are given by: credits = coef1 * t * log(coef2 * t + 1), where
-// coef1 and coef2 are constants defined at game initialisation. Only needs to be called when trying to spawn
-void enemy_manager_update_credits(EnemyManager *enemy_manager, const Constants *constants) {
+// Enemy manager credits, at time t and before spending, are given by: credits = coef1 * t * log(coef2 * t + 1),
+// where coef1 and coef2 are constants defined at game initialisation
+float enemy_manager_calculate_credits(const EnemyManager *enemy_manager, const Constants *constants) {
   float t = GetTime() - enemy_manager->time_of_initialisation;
-  enemy_manager->credits = constants->enemy_credit_coef1 * t * logf(constants->enemy_credit_coef2 * t + 1) -
-                           enemy_manager->credits_spent;
+  return constants->enemy_credit_coef1 * t * logf(constants->enemy_credit_coef2 * t + 1) -
+         enemy_manager->credits_spent;
 }
 
 // Randomly generate a starting position of an enemy. Enemies spawn touching the outside faces of the play area
@@ -354,11 +352,11 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
   if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
 
   while (enemy_manager->enemy_count < enemy_manager->capacity) {
-    enemy_manager_update_credits(enemy_manager, constants);
+    float num_credits = enemy_manager_calculate_credits(enemy_manager, constants);
     // Calculate the maximum affordable enemy type index for the current credit balance of the enemy manager
     int max_i = constants->num_enemy_types - 1;
     while (max_i >= 0) {
-      if (enemy_types[max_i].credit_cost <= enemy_manager->credits) break;
+      if (enemy_types[max_i].credit_cost <= num_credits) break;
       max_i--;
     }
 
@@ -488,6 +486,7 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
       }
 
       player->score++;
+      break;  // Exit the enemy loop so the projectile doesn't destroy a second enemy
     }
   }
 }
@@ -599,7 +598,8 @@ void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_ma
         TextFormat("Projectile count: %2d/%d", projectile_manager->projectile_count, projectile_manager->capacity),
         (Vector2){20, 70}, 20, constants->font_spacing, DARKGRAY);
 
-    DrawTextEx(constants->game_font, TextFormat("Credits: %5.2f", enemy_manager->credits), (Vector2){20, 90}, 20,
+    float num_credits = enemy_manager_calculate_credits(enemy_manager, constants);
+    DrawTextEx(constants->game_font, TextFormat("Credits: %5.2f", num_credits), (Vector2){20, 90}, 20,
                constants->font_spacing, DARKGRAY);
   }
 }
