@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <math.h>
+#include <string.h>
 #include "raylib.h"
 #include "raymath.h"
 
@@ -156,9 +157,9 @@ Vector2 get_rectangle_centre(Rectangle rec) {
   return (Vector2){rec.x + 0.5 * rec.width, rec.y + 0.5 * rec.height};
 }
 
-// Set the player's stats initially. Should be called once at the start of the program
-void player_initialise(Player *player, const Constants *constants) {
-  *player = (Player){0};
+// Set up initial game objects. Should be called once at the start of the program and passed zeroed game objects
+void initialise_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager,
+                     const Constants *constants) {
   player->speed = constants->player_base_speed;
   player->size = constants->player_base_size;
   player->colour = constants->player_colour;
@@ -166,53 +167,56 @@ void player_initialise(Player *player, const Constants *constants) {
   player->projectile_speed = constants->player_base_projectile_speed;
   player->projectile_size = constants->player_base_projectile_size;
   player->projectile_colour = constants->player_projectile_colour;
-}
 
-// Reset the player's stats on game start. Should be called each time the game restarts
-void player_reset(Player *player, const Constants *constants) {
-  float start_time = GetTime();
+  enemy_manager->enemies = calloc(constants->max_enemies, sizeof *(enemy_manager->enemies));
+  if (!enemy_manager->enemies) {
+    fprintf(stderr, "Unable to allocate enemy storage.\n");
+    exit(EXIT_FAILURE);
+  }
+  enemy_manager->capacity = constants->max_enemies;
+  enemy_manager->enemy_spawn_interval =
+      get_random_float(constants->enemy_spawn_interval_min, constants->enemy_spawn_interval_max);
 
-  player->pos = constants->player_start_pos;
-  player->score = 0;
-  player->time_of_last_projectile = start_time;
+  projectile_manager->projectiles = calloc(constants->max_projectiles, sizeof *(projectile_manager->projectiles));
+  if (!projectile_manager->projectiles) {
+    fprintf(stderr, "Unable to allocate projectile storage.\n");
+    exit(EXIT_FAILURE);
+  }
+  projectile_manager->capacity = constants->max_projectiles;
 }
 
 // Perform initialisation steps for game start
 void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager,
                 const Constants *constants) {
   float start_time = GetTime();
-  player_reset(player, constants);
+  player->pos = constants->player_start_pos;
+  player->score = 0;
+  player->time_of_last_projectile = start_time;
 
-  *enemy_manager = (EnemyManager){0};
-  enemy_manager->enemies = calloc(constants->max_enemies, sizeof *(enemy_manager->enemies));
+  memset(enemy_manager->enemies, 0, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
   enemy_manager->enemy_count = 0;
-  enemy_manager->capacity = constants->max_enemies;
-  enemy_manager->enemy_spawn_interval =
-      get_random_float(constants->enemy_spawn_interval_min, constants->enemy_spawn_interval_max);
   enemy_manager->time_of_last_spawn = start_time;
   enemy_manager->credit_rate = constants->base_credit_rate;
   enemy_manager->credit_rate_rate = constants->base_credit_rate_rate;
   enemy_manager->time_of_last_update = start_time;
 
-  *projectile_manager = (ProjectileManager){0};
-  projectile_manager->projectiles = calloc(constants->max_projectiles, sizeof *(projectile_manager->projectiles)),
+  memset(projectile_manager->projectiles, 0,
+         projectile_manager->capacity * sizeof *(projectile_manager->projectiles));
   projectile_manager->projectile_count = 0;
-  projectile_manager->capacity = constants->max_projectiles;
 }
 
-// Clean up game objects when the game ends
+// Perform actions when this instance of the game ends
 void end_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager, Shop *shop) {
   shop->money += player->score;
+}
 
-  if (enemy_manager->enemies) {
-    free(enemy_manager->enemies);
-    enemy_manager->enemies = NULL;
-  }
+// Clean up game objects when the program ends
+void cleanup_game(EnemyManager *enemy_manager, ProjectileManager *projectile_manager) {
+  free(enemy_manager->enemies);
+  enemy_manager->enemies = NULL;
 
-  if (projectile_manager->projectiles) {
-    free(projectile_manager->projectiles);
-    projectile_manager->projectiles = NULL;
-  }
+  free(projectile_manager->projectiles);
+  projectile_manager->projectiles = NULL;
 }
 
 // Get the normalised vector for the direction the player should move according to keyboard input
@@ -273,9 +277,11 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
 
   while (enemy_manager->enemy_count < enemy_manager->capacity) {
     // Calculate the maximum affordable enemy type index for the current credit balance of the enemy manager
-    int max_i = -1;
-    while (max_i < constants->num_enemy_types && enemy_types[max_i].credit_cost <= enemy_manager->credits) max_i++;
-    max_i--;  // We increment max_i one too many times
+    int max_i = constants->num_enemy_types - 1;
+    while (max_i >= 0) {
+      if (enemy_types[max_i].credit_cost <= enemy_manager->credits) break;
+      max_i--;
+    }
 
     if (max_i == -1) break;  // If no enemy types are affordable, stop trying to spawn enemies
 
@@ -710,7 +716,7 @@ int main() {
   button_end_screen_back.bounds.y += 200;
   button_end_screen_back.text = "GO BACK";
 
-  Player player;
+  Player player = {0};
   EnemyManager enemy_manager = {0};
   ProjectileManager projectile_manager = {0};
 
@@ -721,7 +727,7 @@ int main() {
 
   GameScreen game_screen = GAME_SCREEN_START;
   bool show_debug_text = false;
-  player_initialise(&player, &constants);
+  initialise_game(&player, &enemy_manager, &projectile_manager, &constants);
 
   /*-------------------------------------------------------------------------------------------------------------*/
 
@@ -847,8 +853,7 @@ int main() {
   /*-------------------------------------------------------------------------------------------------------------*/
   CloseWindow();
 
-  // In case the player exits from the game screen
-  end_game(&player, &enemy_manager, &projectile_manager, &shop);
+  cleanup_game(&enemy_manager, &projectile_manager);
   /*-------------------------------------------------------------------------------------------------------------*/
 
   return EXIT_SUCCESS;
