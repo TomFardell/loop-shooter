@@ -15,6 +15,17 @@
 
 typedef enum GameScreen { GAME_SCREEN_START, GAME_SCREEN_GAME, GAME_SCREEN_SHOP, GAME_SCREEN_END } GameScreen;
 typedef enum ButtonState { BUTTON_STATE_DEFAULT, BUTTON_STATE_HOVER, BUTTON_STATE_PRESSED } ButtonState;
+typedef enum AnchorPosition {
+  ANCHOR_TOP_LEFT,
+  ANCHOR_TOP_CENTRE,
+  ANCHOR_TOP_RIGHT,
+  ANCHOR_CENTRE_LEFT,
+  ANCHOR_CENTRE,
+  ANCHOR_CENTRE_RIGHT,
+  ANCHOR_BOTTOM_LEFT,
+  ANCHOR_BOTTOM_CENTRE,
+  ANCHOR_BOTTOM_RIGHT
+} AnchorType;
 
 /*---------*/
 /* Structs */
@@ -135,10 +146,11 @@ typedef struct ProjectileManager {
 } ProjectileManager;
 
 typedef struct Button {
-  Rectangle bounds;   // Rectangle containing the bounds of the button (for pressing and drawing)
-  const char *text;   // Text to display inside the button
-  ButtonState state;  // Pressed/hovered state of the button
-  bool was_pressed;   // Whether the button was pressed and the press action should take place
+  Rectangle bounds;        // Rectangle containing the bounds of the button (for pressing and drawing)
+  AnchorType anchor_type;  // Type of anchor for displaying the button
+  const char *text;        // Text to display inside the button
+  ButtonState state;       // Pressed/hovered state of the button
+  bool was_pressed;        // Whether the button was pressed and the press action should take place
 
   Color body_colour_default;  // Colour of the button when not hovered over or pressed
   Color body_colour_hover;    // Colour of the button when hovered over
@@ -164,9 +176,33 @@ bool circle_is_on_screen(Vector2 pos, float rad, const Constants *constants) {
          (-rad <= pos.y && pos.y <= constants->screen_height + rad);
 };
 
-// Get the centre of a given rectangle
-Vector2 get_rectangle_centre(Rectangle rec) {
-  return (Vector2){rec.x + 0.5 * rec.width, rec.y + 0.5 * rec.height};
+// Get the centre of a given rectangle given in vectors form
+Vector2 get_rectangle_centre_v(Vector2 pos, Vector2 dimensions) {
+  return (Vector2){pos.x + 0.5 * dimensions.x, pos.y + 0.5 * dimensions.y};
+}
+
+// Get the centre of a given rectangle given in rectangle form
+Vector2 get_rectangle_centre_rec(Rectangle rec) {
+  return get_rectangle_centre_v((Vector2){rec.x, rec.y}, (Vector2){rec.width, rec.height});
+}
+
+// Given a position relative to an anchor and rectangle dimensions, get the actual position of the top left corner
+Vector2 get_pos_from_anchored_vectors(Vector2 anchored_pos, Vector2 dimensions, AnchorType anchor_type,
+                                      const Constants *constants) {
+  // Due to the ordering of the enum, can use division with remainder to convert the anchor type to a grid position
+  int grid_x = anchor_type % 3;
+  int grid_y = anchor_type / 3;
+
+  // With multiplicities depending on anchor, shift forwards by screen dimensions, and back by rectangle dimensions
+  return (Vector2){anchored_pos.x + 0.5 * grid_x * (constants->screen_width - dimensions.x),
+                   anchored_pos.y + 0.5 * grid_y * (constants->screen_height - dimensions.y)};
+}
+
+// Given a rectangle whose position is relative to an anchor, get the actual position of the top left corner
+Vector2 get_pos_from_anchored_rect(Rectangle anchored_rect, AnchorType anchor_type, const Constants *constants) {
+  return get_pos_from_anchored_vectors((Vector2){anchored_rect.x, anchored_rect.y},
+                                       (Vector2){anchored_rect.width, anchored_rect.height}, anchor_type,
+                                       constants);
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
@@ -324,7 +360,7 @@ float enemy_manager_calculate_credits(const EnemyManager *enemy_manager, const C
 // Randomly generate a starting position of an enemy. Enemies spawn touching the outside faces of the play area
 Vector2 enemy_get_random_start_pos(float enemy_size, const Constants *constants) {
   int vert_or_horiz = GetRandomValue(0, 1);  // Choose to spawn on either the two vertical or two horizontal sides
-  int side_chosen = GetRandomValue(0, 1);    // Choose which of the two sides chosen above to spawn on
+  int side_chosen = GetRandomValue(1, 1);    // Choose which of the two sides chosen above to spawn on
   int x_val = get_random_float(0, constants->screen_width);
   int y_val = get_random_float(0, constants->screen_height);
 
@@ -561,8 +597,11 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
 /*---------------------------------------------------------------------------------------------------------------*/
 
 // Update the state and clicked status of the button from user input
-void button_check_user_interaction(Button *button) {
-  if (CheckCollisionPointRec(GetMousePosition(), button->bounds)) {
+void button_check_user_interaction(Button *button, const Constants *constants) {
+  Vector2 unanchored_pos = get_pos_from_anchored_rect(button->bounds, button->anchor_type, constants);
+  Rectangle unanchored_bounds = {unanchored_pos.x, unanchored_pos.y, button->bounds.width, button->bounds.height};
+
+  if (CheckCollisionPointRec(GetMousePosition(), unanchored_bounds)) {
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
       button->state = BUTTON_STATE_PRESSED;
     else
@@ -617,6 +656,15 @@ void draw_projectiles(const ProjectileManager *projectile_manager) {
 /* UI drawing */
 /*---------------------------------------------------------------------------------------------------------------*/
 
+// Same as DrawTextEx but with the text anchored. Note this does nothing for top left anchored text (and is slower)
+void draw_text_anchored(Font font, const char *text, Vector2 anchored_pos, float size, float spacing, Color colour,
+                        AnchorType anchor_type, const Constants *constants) {
+  Vector2 text_dimensions = MeasureTextEx(font, text, size, spacing);
+  Vector2 adjusted_pos = get_pos_from_anchored_vectors(anchored_pos, text_dimensions, anchor_type, constants);
+
+  DrawTextEx(font, text, adjusted_pos, size, spacing, colour);
+}
+
 // Same as DrawTextEx, but with the text centred
 void draw_text_centred(Font font, const char *text, Vector2 pos, float size, float spacing, Color colour) {
   Vector2 text_dimensions = MeasureTextEx(font, text, size, spacing);
@@ -625,7 +673,22 @@ void draw_text_centred(Font font, const char *text, Vector2 pos, float size, flo
   DrawTextEx(font, text, adjusted_pos, size, spacing, colour);
 }
 
-// Draw a button to the screen with the colour chaning depending on hover/pressed status
+// Same as DrawRectangleV, but with the rectangle anchored
+void draw_anchored_rectangle_v(Vector2 anchored_pos, Vector2 dimensions, Color colour, AnchorType anchor_type,
+                               const Constants *constants) {
+  Vector2 adjusted_pos = get_pos_from_anchored_vectors(anchored_pos, dimensions, anchor_type, constants);
+
+  DrawRectangleV(adjusted_pos, dimensions, colour);
+}
+
+// Same as DrawRectangleRec, but with the rectangle anchored
+void draw_anchored_rectangle_rec(Rectangle anchored_rect, Color colour, AnchorType anchor_type,
+                                 const Constants *constants) {
+  draw_anchored_rectangle_v((Vector2){anchored_rect.x, anchored_rect.y},
+                            (Vector2){anchored_rect.width, anchored_rect.height}, colour, anchor_type, constants);
+}
+
+// Draw an anchored button to the screen with the colour chaning depending on hover/pressed status
 void draw_button(const Button *button, const Constants *constants) {
   Color body_colour;
   switch (button->state) {
@@ -640,9 +703,13 @@ void draw_button(const Button *button, const Constants *constants) {
       break;
   }
 
-  DrawRectangleRec(button->bounds, body_colour);
-  draw_text_centred(constants->game_font, button->text, get_rectangle_centre(button->bounds), button->font_size,
-                    constants->font_spacing, button->text_colour);
+  draw_anchored_rectangle_rec(button->bounds, body_colour, button->anchor_type, constants);
+
+  // We still want the text centred relative to the button, so these calculations are necessary
+  Vector2 unanchored_pos = get_pos_from_anchored_rect(button->bounds, button->anchor_type, constants);
+  Vector2 dimensions = {button->bounds.width, button->bounds.height};
+  draw_text_centred(constants->game_font, button->text, get_rectangle_centre_v(unanchored_pos, dimensions),
+                    button->font_size, constants->font_spacing, button->text_colour);
 }
 
 // Draw score (and other stats if debug text button was pressed)
@@ -670,12 +737,8 @@ void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_ma
 
 // Draw the text for the shop page
 void draw_shop_text(const Shop *shop, const Player *player, const Constants *constants) {
-  // Player money should be right justified
-  const char *money_text = TextFormat("$%d", shop->money);
-  Vector2 money_text_size = MeasureTextEx(constants->game_font, money_text, 35, constants->font_spacing);
-
-  DrawTextEx(constants->game_font, money_text, (Vector2){770 - money_text_size.x, 30}, 35, constants->font_spacing,
-             GOLD);
+  draw_text_anchored(constants->game_font, TextFormat("$%d", shop->money), (Vector2){-30, 30}, 35,
+                     constants->font_spacing, GOLD, ANCHOR_TOP_RIGHT, constants);
 
   Upgrade upgrade_firerate = shop->upgrades[0];
   DrawTextEx(constants->game_font, "Firerate", (Vector2){100, 40}, 30, constants->font_spacing, BLACK);
@@ -727,8 +790,8 @@ int main() {
   /*--------------------------*/
   /* Constants initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
-  Constants constants = {.screen_width = 800,
-                         .screen_height = 600,
+  Constants constants = {.screen_width = 1280,
+                         .screen_height = 720,
                          .target_fps = 240,
 
                          .player_start_pos = {400, 300},
@@ -796,7 +859,8 @@ int main() {
   /*-------------------*/
   /* UI initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
-  Button button_start_screen_start = {.bounds = {275, 150, 250, 100},
+  Button button_start_screen_start = {.bounds = {0, -100, 250, 100},
+                                      .anchor_type = ANCHOR_CENTRE,
                                       .text = "START",
                                       .body_colour_default = YELLOW,
                                       .body_colour_hover = GOLD,
@@ -809,7 +873,8 @@ int main() {
   button_start_screen_shop.bounds.y += 200;
   button_start_screen_shop.text = "SHOP";
 
-  Button button_shop_screen_back = {.bounds = {40, 510, 100, 50},
+  Button button_shop_screen_back = {.bounds = {20, -20, 100, 50},
+                                    .anchor_type = ANCHOR_BOTTOM_LEFT,
                                     .text = "BACK",
                                     .body_colour_default = YELLOW,
                                     .body_colour_hover = GOLD,
@@ -819,6 +884,7 @@ int main() {
 
   // The first purchase button is created manually, and the others are identical but shifted down
   Button buttons_shop_purchase[NUM_UPGRADES] = {{.bounds = {20, 40, 70, 50},
+                                                 .anchor_type = ANCHOR_TOP_LEFT,
                                                  .text = "price",
                                                  .body_colour_default = GREEN,
                                                  .body_colour_hover = LIME,
@@ -862,7 +928,7 @@ int main() {
       /* Start screen update */
       /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_START:
-        button_check_user_interaction(&button_start_screen_start);
+        button_check_user_interaction(&button_start_screen_start, &constants);
         if (button_start_screen_start.was_pressed) {
           button_start_screen_start.was_pressed = false;
 
@@ -870,7 +936,7 @@ int main() {
           start_game(&player, &enemy_manager, &projectile_manager, &constants);
         }
 
-        button_check_user_interaction(&button_start_screen_shop);
+        button_check_user_interaction(&button_start_screen_shop, &constants);
         if (button_start_screen_shop.was_pressed) {
           button_start_screen_shop.was_pressed = false;
 
@@ -908,7 +974,7 @@ int main() {
       /* Shop screen update */
       /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_SHOP:
-        button_check_user_interaction(&button_shop_screen_back);
+        button_check_user_interaction(&button_shop_screen_back, &constants);
         if (button_shop_screen_back.was_pressed) {
           button_shop_screen_back.was_pressed = false;
 
@@ -917,7 +983,7 @@ int main() {
 
         for (int i = 0; i < NUM_UPGRADES; i++) {
           Button *this_purchase_button = buttons_shop_purchase + i;
-          button_check_user_interaction(this_purchase_button);
+          button_check_user_interaction(this_purchase_button, &constants);
           if (this_purchase_button->was_pressed) {
             this_purchase_button->was_pressed = false;
 
@@ -933,7 +999,7 @@ int main() {
       /* End screen update */
       /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_END:
-        button_check_user_interaction(&button_end_screen_back);
+        button_check_user_interaction(&button_end_screen_back, &constants);
         if (button_end_screen_back.was_pressed) {
           button_end_screen_back.was_pressed = false;
 
