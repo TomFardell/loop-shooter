@@ -36,14 +36,19 @@ typedef struct Constants {
 
   float upgrade_cost_multiplier;  // Multiplier applied to the cost of successive upgrades in the shop
 
-  int max_enemies;                 // Maximum number of enemies. Enemies stop spawning when this is reached
-  float enemy_spawn_interval_min;  // Minimum time between enemy spawns
-  float enemy_spawn_interval_max;  // Maximum time between enemy spawns
-  float enemy_update_interval;     // Time interval between attempts at updating the enemy's desired position
-  float enemy_update_chance;       // Chance (each update) that the enemy updates its desired position
-  int num_enemy_types;             // How many different types of enemies are in existence
-  float enemy_credit_coef1;        // Multiplicative coefficient in enemy credit calculation
-  float enemy_credit_coef2;        // Log coefficient in enemy credit calculation
+  int max_enemies;                   // Maximum number of enemies. Enemies stop spawning when this is reached
+  int num_enemy_types;               // How many different types of enemies are in existence
+  float enemy_spawn_interval_min;    // Minimum time between enemy spawns
+  float enemy_spawn_interval_max;    // Maximum time between enemy spawns
+  float enemy_first_spawn_interval;  // Time to spawn the first wave of enemies
+  int enemy_spawn_min_wave_size;     // Minimum number of enemies to spawn at once
+  float enemy_spawn_additional_enemy_chance;  // Chance to add additional enemies to the wave
+  float initial_enemy_credits;                // Number of starting credits (so the fist wave doesn't take ages)
+  float enemy_credit_multiplier;              // Multiplicative coefficient in enemy credit calculation
+  float enemy_credit_exponent;                // Exponent in enemy credit calculation
+
+  float enemy_update_interval;  // Time interval between attempts at updating the enemy's desired position
+  float enemy_update_chance;    // Chance (each update) that the enemy updates its desired position
 
   int max_projectiles;  // Maximum number of projectiles. This number should not be reached
 
@@ -186,8 +191,6 @@ void initialise_game(Player *player, EnemyManager *enemy_manager, ProjectileMana
     exit(EXIT_FAILURE);
   }
   enemy_manager->capacity = constants->max_enemies;
-  enemy_manager->enemy_spawn_interval =
-      get_random_float(constants->enemy_spawn_interval_min, constants->enemy_spawn_interval_max);
 
   projectile_manager->projectiles = calloc(constants->max_projectiles, sizeof *(projectile_manager->projectiles));
   if (!projectile_manager->projectiles) {
@@ -207,6 +210,7 @@ void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *
 
   memset(enemy_manager->enemies, 0, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
   enemy_manager->enemy_count = 0;
+  enemy_manager->enemy_spawn_interval = constants->enemy_first_spawn_interval;
   enemy_manager->time_of_last_spawn = start_time;
   enemy_manager->credits_spent = 0;
   enemy_manager->time_of_initialisation = start_time;
@@ -309,12 +313,12 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
 /* Enemy management */
 /*---------------------------------------------------------------------------------------------------------------*/
 
-// Enemy manager credits, at time t and before spending, are given by: credits = coef1 * t * log(coef2 * t + 1),
-// where coef1 and coef2 are constants defined at game initialisation
+// Enemy manager credits, at time t and before spending, are given by: credits = mult * t ^ exp,
+// where mult and exp are constants defined at game initialisation
 float enemy_manager_calculate_credits(const EnemyManager *enemy_manager, const Constants *constants) {
   float t = GetTime() - enemy_manager->time_of_initialisation;
-  return constants->enemy_credit_coef1 * t * logf(constants->enemy_credit_coef2 * t + 1) -
-         enemy_manager->credits_spent;
+  return constants->enemy_credit_multiplier * powf(t, constants->enemy_credit_exponent) -
+         enemy_manager->credits_spent + constants->initial_enemy_credits;
 }
 
 // Randomly generate a starting position of an enemy. Enemies spawn touching the outside faces of the play area
@@ -351,34 +355,94 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
   float time_since_last_enemy = GetTime() - enemy_manager->time_of_last_spawn;
   if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
 
-  while (enemy_manager->enemy_count < enemy_manager->capacity) {
-    float num_credits = enemy_manager_calculate_credits(enemy_manager, constants);
-    // Calculate the maximum affordable enemy type index for the current credit balance of the enemy manager
-    int max_i = constants->num_enemy_types - 1;
-    while (max_i >= 0) {
-      if (enemy_types[max_i].credit_cost <= num_credits) break;
-      max_i--;
+  // If we cannot afford the minimum wave, do nothing (i.e wait a bit longer)
+  float available_credits = enemy_manager_calculate_credits(enemy_manager, constants);
+  int wave_size = constants->enemy_spawn_min_wave_size;
+  int wave_cost = wave_size * enemy_types[0].credit_cost;
+  if (wave_cost > available_credits) return;
+
+  // Keep trying to increase the wave size until either we fail the probability check or we cannot afford the wave
+  while (wave_cost + enemy_types[0].credit_cost <= available_credits &&
+         get_random_float(0, 1) <= constants->enemy_spawn_additional_enemy_chance) {
+    wave_size++;
+    wave_cost += enemy_types[0].credit_cost;
+  };
+
+  // Store wave as an array of enemy types, initialised to all be of the weakest type
+  int *wave_enemy_types = calloc(wave_size, sizeof *wave_enemy_types);
+  if (!wave_enemy_types) {
+    fprintf(stderr, "Error allocating wave enemy types memory.\n");
+    exit(EXIT_FAILURE);
+  }
+
+  bool upgrade_instead_of_add = true;                       // First iteration should upgrade the enemies
+  float cheapest_action_cost = enemy_types[0].credit_cost;  // Assume the cheapest action is adding a type 0 enemy
+
+  // While it is possible to increase the strength of the wave, continue to do so
+  while (wave_cost < available_credits - cheapest_action_cost) {
+    // Upgrade existing enemies
+    if (upgrade_instead_of_add) {
+      // Try to upgrade each enemy in the wave
+      for (int i = 0; i < wave_size; i++) {
+        int this_enemy_type = wave_enemy_types[i];
+
+        // If this enemy is already of the strongest type, don't try to upgrade it
+        if (this_enemy_type == constants->num_enemy_types - 1) continue;
+
+        int this_enemy_new_type = GetRandomValue(this_enemy_type + 1, constants->num_enemy_types - 1);
+
+        // If upgrading this enemy to this type would be too expensive, don't upgrade it
+        float cost_increase =
+            enemy_types[this_enemy_new_type].credit_cost - enemy_types[this_enemy_type].credit_cost;
+        if (wave_cost + cost_increase > available_credits) continue;
+
+        // Otherwise, upgrade the enemy
+        wave_enemy_types[i] = this_enemy_new_type;
+        wave_cost += cost_increase;
+      }
+    } else {  // Add more enemies
+      int prev_wave_size = wave_size;
+
+      // Add enemies in the same way as before, but now guarentee one additional enemy
+      do {
+        wave_size++;
+        wave_cost += enemy_types[0].credit_cost;
+      } while (wave_cost + enemy_types[0].credit_cost <= available_credits &&
+               get_random_float(0, 1) <= constants->enemy_spawn_additional_enemy_chance);
+
+      // Check that adding a type 0 enemy was in fact the cheapest action
+      assert((wave_cost <= available_credits) && "Enemies added to wave exceeded credits");
+
+      // Increase wave array size and ensure the new enemies are of type 0
+      wave_enemy_types = realloc(wave_enemy_types, wave_size * sizeof *wave_enemy_types);
+      if (!wave_enemy_types) {
+        fprintf(stderr, "Error reallocating wave enemy types memory.\n");
+        exit(EXIT_FAILURE);
+      }
+      memset(wave_enemy_types + prev_wave_size, 0, (wave_size - prev_wave_size) * sizeof *wave_enemy_types);
     }
+    // Further iterations randomly choose to either upgrade the current enemies or add more
+    upgrade_instead_of_add = GetRandomValue(0, 1);
+  }
 
-    if (max_i == -1) break;  // If no enemy types are affordable, stop trying to spawn enemies
-
-    // Randomly select an affordable enemy type to be spawned
-    const EnemyType *type_chosen = enemy_types + GetRandomValue(0, max_i);
-
-    // Loop through the enemy slots until an inactive enemy is found. Note that since the enemy array was
-    // initialised to zero, by default all the slots contain inactive enemies
-    for (int i = 0; i < enemy_manager->capacity; i++) {
-      if (!enemy_manager->enemies[i].is_active) {
-        enemy_manager->enemies[i] = enemy_generate(type_chosen, player, constants);
+  // Actually generate the chosen enemies
+  for (int i = 0; i < wave_size; i++) {
+    // Loop through the enemy slots until an inactive enemy is found and replace with an enemy of the desired type
+    for (int j = 0; j < enemy_manager->capacity; j++) {
+      if (!enemy_manager->enemies[j].is_active) {
+        enemy_manager->enemies[j] = enemy_generate(enemy_types + wave_enemy_types[i], player, constants);
         enemy_manager->enemy_count++;
-        enemy_manager->credits_spent += type_chosen->credit_cost;
         break;
       }
 
-      // Check that the loop doesn't terminate without finding an inactive enemy (this is the final i)
-      assert((i != enemy_manager->capacity - 1) && "No inactive enemy found");
+      // Check that the loop doesn't terminate without finding an inactive enemy (this is the final j)
+      assert((j != enemy_manager->capacity - 1) && "No inactive enemy found");
     }
   }
+
+  enemy_manager->credits_spent += wave_cost;
+  free(wave_enemy_types);
+  wave_enemy_types = NULL;
 
   // Reset the enemy timer and generate a new interval length
   enemy_manager->time_of_last_spawn = GetTime();
@@ -680,13 +744,18 @@ int main() {
                          .upgrade_cost_multiplier = 1.5,
 
                          .max_enemies = 100,
-                         .enemy_spawn_interval_min = 1.0,
-                         .enemy_spawn_interval_max = 1.5,
+                         .num_enemy_types = 3,
+                         .enemy_spawn_interval_min = 3.5,
+                         .enemy_spawn_interval_max = 4.5,
+                         .enemy_first_spawn_interval = 2.0,
+                         .enemy_spawn_min_wave_size = 3,
+                         .enemy_spawn_additional_enemy_chance = 0.3,
+                         .initial_enemy_credits = 2.8,
+                         .enemy_credit_multiplier = 0.2,
+                         .enemy_credit_exponent = 1.5,
+
                          .enemy_update_interval = 0.2,
                          .enemy_update_chance = 0.02,
-                         .num_enemy_types = 3,
-                         .enemy_credit_coef1 = 0.5,
-                         .enemy_credit_coef2 = 2.0,
 
                          .max_projectiles = 40,
 
