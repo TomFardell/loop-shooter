@@ -732,6 +732,9 @@ void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_ma
     float num_credits = enemy_manager_calculate_credits(enemy_manager, constants);
     DrawTextEx(constants->game_font, TextFormat("Credits: %5.2f", num_credits), (Vector2){20, 90}, 20,
                constants->font_spacing, DARKGRAY);
+
+    draw_text_anchored(constants->game_font, TextFormat("%d", GetFPS()), (Vector2){-20, 20}, 30,
+                       constants->font_spacing, GREEN, ANCHOR_TOP_RIGHT, constants);
   }
 }
 
@@ -794,7 +797,7 @@ int main() {
                          .screen_height = 720,
                          .target_fps = 240,
 
-                         .player_start_pos = {400, 300},
+                         .player_start_pos = {640, 360},
                          .player_base_speed = 500,
                          .player_base_size = 20,
                          .player_colour = VIOLET,
