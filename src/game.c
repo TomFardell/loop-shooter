@@ -31,9 +31,13 @@ typedef enum AnchorPosition {
 /* Structs */
 /*---------------------------------------------------------------------------------------------------------------*/
 typedef struct Constants {
-  int screen_width;   // Game screen width in pixels
-  int screen_height;  // Game screen height in pixels
-  int target_fps;     // Target frames per second of the game
+  int initial_screen_width_in_pixels;   // Initial game window width in pixels
+  int initial_screen_height_in_pixels;  // Initial game window height in pixels
+  float aspect_ratio;                   // Aspect ratio to keep the game at (we draw black bars to maintain this)
+  float screen_width_in_units;          // Number of units in one screen's width
+  float screen_height_in_units;         // Number of units in one screen's height
+
+  int target_fps;  // Target frames per second of the game
 
   Vector2 player_start_pos;  // Starting position of the player
   float player_base_speed;   // Initial speed of the player
@@ -172,8 +176,8 @@ float get_random_float(float min, float max) {
 
 // Get whether a given circle with centre `pos` and radius `rad` would be showing on the screen
 bool circle_is_on_screen(Vector2 pos, float rad, const Constants *constants) {
-  return (-rad <= pos.x && pos.x <= constants->screen_width + rad) &&
-         (-rad <= pos.y && pos.y <= constants->screen_height + rad);
+  return (-rad <= pos.x && pos.x <= constants->screen_width_in_units + rad) &&
+         (-rad <= pos.y && pos.y <= constants->screen_height_in_units + rad);
 };
 
 // Get the centre of a given rectangle given in vectors form
@@ -194,8 +198,8 @@ Vector2 get_pos_from_anchored_vectors(Vector2 anchored_pos, Vector2 dimensions, 
   int grid_y = anchor_type / 3;
 
   // With multiplicities depending on anchor, shift forwards by screen dimensions, and back by rectangle dimensions
-  return (Vector2){anchored_pos.x + 0.5 * grid_x * (constants->screen_width - dimensions.x),
-                   anchored_pos.y + 0.5 * grid_y * (constants->screen_height - dimensions.y)};
+  return (Vector2){anchored_pos.x + 0.5 * grid_x * (constants->screen_width_in_units - dimensions.x),
+                   anchored_pos.y + 0.5 * grid_y * (constants->screen_height_in_units - dimensions.y)};
 }
 
 // Given a rectangle whose position is relative to an anchor, get the actual position of the top left corner
@@ -203,6 +207,89 @@ Vector2 get_pos_from_anchored_rect(Rectangle anchored_rect, AnchorType anchor_ty
   return get_pos_from_anchored_vectors((Vector2){anchored_rect.x, anchored_rect.y},
                                        (Vector2){anchored_rect.width, anchored_rect.height}, anchor_type,
                                        constants);
+}
+
+// Get the scale of one of the two black bars required to maintain the desired aspect ratio. A positive return
+// value indicates the width of the required vertical bars. A negative return value indicates the (negative) height
+// of the required horizontal bars
+float get_black_bar_size_in_pixels(const Constants *constants) {
+  float screen_width = GetScreenWidth();
+  float screen_height = GetScreenHeight();
+  float aspect_ratio = screen_width / screen_height;
+
+  // No black bars if the aspect ratios are (approximately) equal
+  if (FloatEquals(aspect_ratio, constants->aspect_ratio)) return 0;
+
+  if (aspect_ratio > constants->aspect_ratio) {  // If the window is too wide
+    return 0.5 * (screen_width - constants->aspect_ratio * screen_height);
+  } else {  // If the window is too tall
+    return -0.5 * (screen_height - (1 / constants->aspect_ratio) * screen_width);
+  }
+}
+
+// Get the scale factor required to convert a measurement in units to one in pixels
+float get_units_to_pixels_scale_factor(const Constants *constants) {
+  float black_bar_size = get_black_bar_size_in_pixels(constants);
+
+  // Calculate screen size in pixels (i.e. the viewable portion of the window) divided by screen size in units
+  if (black_bar_size >= 0) {  // If there are vertical (or no) black bars, use height
+    return GetScreenHeight() / constants->screen_height_in_units;
+  } else {  // If there are horizontal black bars, use width
+    return GetScreenWidth() / constants->screen_width_in_units;
+  }
+}
+// Convert a position in units to a position in pixels (for drawing), accounting for black bars
+Vector2 get_draw_position_from_unit_position(Vector2 unit_position, const Constants *constants) {
+  float black_bar_size = get_black_bar_size_in_pixels(constants);
+  float scale_factor = get_units_to_pixels_scale_factor(constants);
+
+  if (black_bar_size >= 0) {  // If there are vertical (or no) black bars
+    return (Vector2){unit_position.x * scale_factor + black_bar_size, unit_position.y * scale_factor};
+  } else {                             // If there are horizontal black bars
+    black_bar_size = -black_bar_size;  // Get the actual height of the black bars
+
+    return (Vector2){unit_position.x * scale_factor, unit_position.y * scale_factor + black_bar_size};
+  }
+}
+// Convert a position in pixels (such as from GetMousePosition) to a position in units
+Vector2 get_unit_position_from_draw_position(Vector2 draw_position, const Constants *constants) {
+  float black_bar_size = get_black_bar_size_in_pixels(constants);
+  float scale_factor = 1 / get_units_to_pixels_scale_factor(constants);
+
+  if (black_bar_size >= 0) {  // If there are vertical (or no) black bars
+    return (Vector2){(draw_position.x - black_bar_size) * scale_factor, draw_position.y * scale_factor};
+  } else {                             // If there are horizontal black bars
+    black_bar_size = -black_bar_size;  // Get the actual height of the black bars
+
+    return (Vector2){draw_position.x * scale_factor, (draw_position.y - black_bar_size) * scale_factor};
+  }
+}
+
+// Given dimensions in units, convert to dimensions in pixels
+Vector2 get_draw_dimensions_from_unit_dimensions(Vector2 unit_dimensions, const Constants *constants) {
+  return Vector2Scale(unit_dimensions, get_units_to_pixels_scale_factor(constants));
+}
+
+// Given dimensions in pixels (such as from MeasureTextEx), convert to dimensions in units
+Vector2 get_unit_dimensions_from_draw_dimensions(Vector2 draw_dimensions, const Constants *constants) {
+  return Vector2Scale(draw_dimensions, 1 / get_units_to_pixels_scale_factor(constants));
+}
+
+// Convert a length in units to the length in pixels when drawn to the screen
+float get_draw_length_from_unit_length(float length, const Constants *constants) {
+  return length * get_units_to_pixels_scale_factor(constants);
+}
+
+// GetMousePosition from raylib, but with the result in units
+Vector2 get_mouse_position_in_units(const Constants *constants) {
+  return get_unit_position_from_draw_position(GetMousePosition(), constants);
+}
+
+// MeasureTextEx from raylib, but with the result in units
+Vector2 measure_text_ex_in_units(Font font, const char *text, float size, float spacing,
+                                 const Constants *constants) {
+  return get_unit_dimensions_from_draw_dimensions(
+      MeasureTextEx(font, text, get_draw_length_from_unit_length(size, constants), spacing), constants);
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
@@ -294,19 +381,20 @@ void player_update_position(Player *player, const Constants *constants) {
 
   // Clamp the player inside the screen boundaries
   Vector2 min_player_pos = {player->size, player->size};
-  Vector2 max_player_pos = {constants->screen_width - player->size, constants->screen_height - player->size};
+  Vector2 max_player_pos = {constants->screen_width_in_units - player->size,
+                            constants->screen_height_in_units - player->size};
   player->pos = Vector2Clamp(player->pos, min_player_pos, max_player_pos);
 }
 
 // Generate a new projectile that moves towards the mouse
-Projectile projectile_generate(const Player *player) {
+Projectile projectile_generate(const Player *player, const Constants *constants) {
   Projectile projectile = {.pos = player->pos,
                            .is_active = true,
                            .speed = player->projectile_speed,
                            .size = player->projectile_size,
                            .colour = player->projectile_colour};
 
-  Vector2 mouse_pos = GetMousePosition();
+  Vector2 mouse_pos = get_mouse_position_in_units(constants);
 
   // If the mouse is on the player, just fire in an arbitrary direction, otherwise fire towards the mouse
   if (Vector2Equals(mouse_pos, player->pos))
@@ -318,7 +406,8 @@ Projectile projectile_generate(const Player *player) {
 }
 
 // Spawn a new projectile when it is time to do so and if the correct button is down
-void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager) {
+void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager,
+                                    const Constants *constants) {
   // The projectile manager should have capacity large enough that it never becomes full
   assert((projectile_manager->projectile_count < projectile_manager->capacity) &&
          "Trying to add projectile to full projectile manager");
@@ -332,7 +421,7 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
 
   for (int i = 0; i < projectile_manager->capacity; i++) {
     if (!projectile_manager->projectiles[i].is_active) {
-      projectile_manager->projectiles[i] = projectile_generate(player);
+      projectile_manager->projectiles[i] = projectile_generate(player, constants);
       projectile_manager->projectile_count++;
       break;
     }
@@ -361,14 +450,15 @@ float enemy_manager_calculate_credits(const EnemyManager *enemy_manager, const C
 Vector2 enemy_get_random_start_pos(float enemy_size, const Constants *constants) {
   int vert_or_horiz = GetRandomValue(0, 1);  // Choose to spawn on either the two vertical or two horizontal sides
   int side_chosen = GetRandomValue(1, 1);    // Choose which of the two sides chosen above to spawn on
-  int x_val = get_random_float(0, constants->screen_width);
-  int y_val = get_random_float(0, constants->screen_height);
+  int x_val = get_random_float(0, constants->screen_width_in_units);
+  int y_val = get_random_float(0, constants->screen_height_in_units);
 
   // Use the numbers generated above to pick a random position on the edges of the play area (plus one enemy width)
-  return (Vector2){vert_or_horiz * x_val +
-                       !vert_or_horiz * (side_chosen * (constants->screen_width + 2 * enemy_size) - enemy_size),
-                   !vert_or_horiz * y_val +
-                       vert_or_horiz * (side_chosen * (constants->screen_height + 2 * enemy_size) - enemy_size)};
+  return (Vector2){
+      vert_or_horiz * x_val +
+          !vert_or_horiz * (side_chosen * (constants->screen_width_in_units + 2 * enemy_size) - enemy_size),
+      !vert_or_horiz * y_val +
+          vert_or_horiz * (side_chosen * (constants->screen_height_in_units + 2 * enemy_size) - enemy_size)};
 }
 
 // Randomly generate a new enemy
@@ -397,7 +487,8 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
   int wave_cost = wave_size * enemy_types[0].credit_cost;
   if (wave_cost > available_credits) return;
 
-  // Keep trying to increase the wave size until either we fail the probability check or we cannot afford the wave
+  // Keep trying to increase the wave size until either we fail the probability check or we cannot afford the
+  // wave
   while (wave_cost + enemy_types[0].credit_cost <= available_credits &&
          get_random_float(0, 1) <= constants->enemy_spawn_additional_enemy_chance) {
     wave_size++;
@@ -601,7 +692,7 @@ void button_check_user_interaction(Button *button, const Constants *constants) {
   Vector2 unanchored_pos = get_pos_from_anchored_rect(button->bounds, button->anchor_type, constants);
   Rectangle unanchored_bounds = {unanchored_pos.x, unanchored_pos.y, button->bounds.width, button->bounds.height};
 
-  if (CheckCollisionPointRec(GetMousePosition(), unanchored_bounds)) {
+  if (CheckCollisionPointRec(get_mouse_position_in_units(constants), unanchored_bounds)) {
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
       button->state = BUTTON_STATE_PRESSED;
     else
@@ -629,25 +720,30 @@ void shop_try_to_purchase_upgrade(Shop *shop, Upgrade *upgrade, const Constants 
 /*---------------------------------------------------------------------------------------------------------------*/
 
 // Draw the player to the canvas
-void draw_player(const Player *player) { DrawCircleV(player->pos, player->size, player->colour); }
+void draw_player(const Player *player, const Constants *constants) {
+  DrawCircleV(get_draw_position_from_unit_position(player->pos, constants),
+              get_draw_length_from_unit_length(player->size, constants), player->colour);
+}
 
 // Draw the active enemies to the canvas
-void draw_enemies(const EnemyManager *enemy_manager) {
+void draw_enemies(const EnemyManager *enemy_manager, const Constants *constants) {
   for (int i = 0; i < enemy_manager->capacity; i++) {
     Enemy this_enemy = enemy_manager->enemies[i];
     if (!this_enemy.is_active) continue;
 
-    DrawCircleV(this_enemy.pos, this_enemy.size, this_enemy.type->colour);
+    DrawCircleV(get_draw_position_from_unit_position(this_enemy.pos, constants),
+                get_draw_length_from_unit_length(this_enemy.size, constants), this_enemy.type->colour);
   }
 }
 
 // Draw the active projectiles to the canvas
-void draw_projectiles(const ProjectileManager *projectile_manager) {
+void draw_projectiles(const ProjectileManager *projectile_manager, const Constants *constants) {
   for (int i = 0; i < projectile_manager->capacity; i++) {
     Projectile this_projectile = projectile_manager->projectiles[i];
     if (!this_projectile.is_active) continue;
 
-    DrawCircleV(this_projectile.pos, this_projectile.size, this_projectile.colour);
+    DrawCircleV(get_draw_position_from_unit_position(this_projectile.pos, constants),
+                get_draw_length_from_unit_length(this_projectile.size, constants), this_projectile.colour);
   }
 }
 /*---------------------------------------------------------------------------------------------------------------*/
@@ -656,21 +752,44 @@ void draw_projectiles(const ProjectileManager *projectile_manager) {
 /* UI drawing */
 /*---------------------------------------------------------------------------------------------------------------*/
 
-// Same as DrawTextEx but with the text anchored. Note this does nothing for top left anchored text (and is slower)
+// Draw black bars on the screen to maintain the desired aspect ratio
+void draw_black_bars(const Constants *constants) {
+  // Note I haven't used get_black_bar_size since we still need the screen width and height to draw the bars
+  float screen_width = GetScreenWidth();
+  float screen_height = GetScreenHeight();
+  float aspect_ratio = screen_width / screen_height;
+
+  // Don't draw black bars if the aspect ratios are (approximately) equal
+  if (FloatEquals(aspect_ratio, constants->aspect_ratio)) return;
+
+  if (aspect_ratio > constants->aspect_ratio) {  // If the window is too wide
+    float black_bar_width = 0.5 * (screen_width - constants->aspect_ratio * screen_height);
+    DrawRectangle(0, 0, black_bar_width, screen_height, BLACK);
+    DrawRectangle(screen_width - black_bar_width, 0, black_bar_width, screen_height, BLACK);
+  } else {  // If the window is too tall
+    float black_bar_height = 0.5 * (screen_height - (1 / constants->aspect_ratio) * screen_width);
+    DrawRectangle(0, 0, screen_width, black_bar_height, BLACK);
+    DrawRectangle(0, screen_height - black_bar_height, screen_width, black_bar_height, BLACK);
+  }
+}
+// Same as DrawTextEx but with the text anchored
 void draw_text_anchored(Font font, const char *text, Vector2 anchored_pos, float size, float spacing, Color colour,
                         AnchorType anchor_type, const Constants *constants) {
-  Vector2 text_dimensions = MeasureTextEx(font, text, size, spacing);
+  Vector2 text_dimensions = measure_text_ex_in_units(font, text, size, spacing, constants);
   Vector2 adjusted_pos = get_pos_from_anchored_vectors(anchored_pos, text_dimensions, anchor_type, constants);
 
-  DrawTextEx(font, text, adjusted_pos, size, spacing, colour);
+  DrawTextEx(font, text, get_draw_position_from_unit_position(adjusted_pos, constants),
+             get_draw_length_from_unit_length(size, constants), spacing, colour);
 }
 
 // Same as DrawTextEx, but with the text centred
-void draw_text_centred(Font font, const char *text, Vector2 pos, float size, float spacing, Color colour) {
-  Vector2 text_dimensions = MeasureTextEx(font, text, size, spacing);
+void draw_text_centred(Font font, const char *text, Vector2 pos, float size, float spacing, Color colour,
+                       const Constants *constants) {
+  Vector2 text_dimensions = measure_text_ex_in_units(font, text, size, spacing, constants);
   Vector2 adjusted_pos = {pos.x - 0.5 * text_dimensions.x, pos.y - 0.5 * text_dimensions.y};
 
-  DrawTextEx(font, text, adjusted_pos, size, spacing, colour);
+  DrawTextEx(font, text, get_draw_position_from_unit_position(adjusted_pos, constants),
+             get_draw_length_from_unit_length(size, constants), spacing, colour);
 }
 
 // Same as DrawRectangleV, but with the rectangle anchored
@@ -678,7 +797,8 @@ void draw_anchored_rectangle_v(Vector2 anchored_pos, Vector2 dimensions, Color c
                                const Constants *constants) {
   Vector2 adjusted_pos = get_pos_from_anchored_vectors(anchored_pos, dimensions, anchor_type, constants);
 
-  DrawRectangleV(adjusted_pos, dimensions, colour);
+  DrawRectangleV(get_draw_position_from_unit_position(adjusted_pos, constants),
+                 get_draw_dimensions_from_unit_dimensions(dimensions, constants), colour);
 }
 
 // Same as DrawRectangleRec, but with the rectangle anchored
@@ -709,63 +829,66 @@ void draw_button(const Button *button, const Constants *constants) {
   Vector2 unanchored_pos = get_pos_from_anchored_rect(button->bounds, button->anchor_type, constants);
   Vector2 dimensions = {button->bounds.width, button->bounds.height};
   draw_text_centred(constants->game_font, button->text, get_rectangle_centre_v(unanchored_pos, dimensions),
-                    button->font_size, constants->font_spacing, button->text_colour);
+                    button->font_size, constants->font_spacing, button->text_colour, constants);
 }
 
 // Draw score (and other stats if debug text button was pressed)
 void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_manager,
                               const ProjectileManager *projectile_manager, const Constants *constants,
                               bool show_debug_text) {
-  DrawTextEx(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){20, 20}, 30,
-             constants->font_spacing, BLACK);
+  draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0.25, 0.25}, 0.4,
+                     constants->font_spacing, BLACK, ANCHOR_TOP_LEFT, constants);
 
   if (show_debug_text) {
-    DrawTextEx(constants->game_font,
-               TextFormat("Enemy count: %2d/%d", enemy_manager->enemy_count, enemy_manager->capacity),
-               (Vector2){20, 50}, 20, constants->font_spacing, DARKGRAY);
+    draw_text_anchored(constants->game_font,
+                       TextFormat("Enemy count: %2d/%d", enemy_manager->enemy_count, enemy_manager->capacity),
+                       (Vector2){0.25, 0.75}, 0.25, constants->font_spacing, DARKGRAY, ANCHOR_TOP_LEFT, constants);
 
-    DrawTextEx(
+    draw_text_anchored(
         constants->game_font,
         TextFormat("Projectile count: %2d/%d", projectile_manager->projectile_count, projectile_manager->capacity),
-        (Vector2){20, 70}, 20, constants->font_spacing, DARKGRAY);
+        (Vector2){0.25, 1}, 0.25, constants->font_spacing, DARKGRAY, ANCHOR_TOP_LEFT, constants);
 
     float num_credits = enemy_manager_calculate_credits(enemy_manager, constants);
-    DrawTextEx(constants->game_font, TextFormat("Credits: %5.2f", num_credits), (Vector2){20, 90}, 20,
-               constants->font_spacing, DARKGRAY);
+    draw_text_anchored(constants->game_font, TextFormat("Credits: %5.2f", num_credits), (Vector2){0.25, 1.25},
+                       0.25, constants->font_spacing, DARKGRAY, ANCHOR_TOP_LEFT, constants);
 
-    draw_text_anchored(constants->game_font, TextFormat("%d", GetFPS()), (Vector2){-20, 20}, 30,
+    draw_text_anchored(constants->game_font, TextFormat("%d", GetFPS()), (Vector2){-0.25, 0.25}, 0.35,
                        constants->font_spacing, GREEN, ANCHOR_TOP_RIGHT, constants);
   }
 }
 
 // Draw the text for the shop page
 void draw_shop_text(const Shop *shop, const Player *player, const Constants *constants) {
-  draw_text_anchored(constants->game_font, TextFormat("$%d", shop->money), (Vector2){-30, 30}, 35,
+  draw_text_anchored(constants->game_font, TextFormat("$%d", shop->money), (Vector2){-0.5, 0.5}, 0.4,
                      constants->font_spacing, GOLD, ANCHOR_TOP_RIGHT, constants);
 
   Upgrade upgrade_firerate = shop->upgrades[0];
-  DrawTextEx(constants->game_font, "Firerate", (Vector2){100, 40}, 30, constants->font_spacing, BLACK);
-  DrawTextEx(constants->game_font,
-             TextFormat("%.1f -> %.1f", player->firerate,
-                        player->firerate + upgrade_firerate.stat_increment * constants->player_base_firerate),
-             (Vector2){100, 70}, 20, constants->font_spacing, DARKBROWN);
+  draw_text_anchored(constants->game_font, "Firerate", (Vector2){1.25, 0.5}, 0.4, constants->font_spacing, BLACK,
+                     ANCHOR_TOP_LEFT, constants);
+  draw_text_anchored(
+      constants->game_font,
+      TextFormat("%.1f -> %.1f", player->firerate,
+                 player->firerate + upgrade_firerate.stat_increment * constants->player_base_firerate),
+      (Vector2){1.25, 0.9}, 0.3, constants->font_spacing, DARKBROWN, ANCHOR_TOP_LEFT, constants);
 
-  // Projectile speed is displayed at 1/100 scale
   Upgrade upgrade_projectile_speed = shop->upgrades[1];
-  DrawTextEx(constants->game_font, "Projectile speed", (Vector2){100, 120}, 30, constants->font_spacing, BLACK);
-  DrawTextEx(constants->game_font,
-             TextFormat("%.1f -> %.1f", 0.01 * player->projectile_speed,
-                        0.01 * (player->projectile_speed + upgrade_projectile_speed.stat_increment *
-                                                               constants->player_base_projectile_speed)),
-             (Vector2){100, 150}, 20, constants->font_spacing, DARKBROWN);
+  draw_text_anchored(constants->game_font, "Projectile speed", (Vector2){1.25, 1.5}, 0.4, constants->font_spacing,
+                     BLACK, ANCHOR_TOP_LEFT, constants);
+  draw_text_anchored(constants->game_font,
+                     TextFormat("%.1f -> %.1f", player->projectile_speed,
+                                player->projectile_speed + upgrade_projectile_speed.stat_increment *
+                                                               constants->player_base_projectile_speed),
+                     (Vector2){1.25, 1.9}, 0.3, constants->font_spacing, DARKBROWN, ANCHOR_TOP_LEFT, constants);
 
   Upgrade upgrade_projectile_size = shop->upgrades[2];
-  DrawTextEx(constants->game_font, "Projectile size", (Vector2){100, 200}, 30, constants->font_spacing, BLACK);
-  DrawTextEx(constants->game_font,
-             TextFormat("%.1f -> %.1f", player->projectile_size,
-                        player->projectile_size +
-                            upgrade_projectile_size.stat_increment * constants->player_base_projectile_size),
-             (Vector2){100, 230}, 20, constants->font_spacing, DARKBROWN);
+  draw_text_anchored(constants->game_font, "Projectile size", (Vector2){1.25, 2.5}, 0.4, constants->font_spacing,
+                     BLACK, ANCHOR_TOP_LEFT, constants);
+  draw_text_anchored(constants->game_font,
+                     TextFormat("%.2f -> %.2f", player->projectile_size,
+                                player->projectile_size + upgrade_projectile_size.stat_increment *
+                                                              constants->player_base_projectile_size),
+                     (Vector2){1.25, 2.9}, 0.3, constants->font_spacing, DARKBROWN, ANCHOR_TOP_LEFT, constants);
 }
 
 // Update text for and draw purchase buttons in the shop screen
@@ -787,24 +910,35 @@ void draw_shop_purchase_buttons(Button *buttons_shop_purchase, const Shop *shop,
   button_purchase_projectile_size->text = TextFormat("$%d", lroundf(upgrade_projectile_size.cost));
   draw_button(button_purchase_projectile_size, constants);
 }
+
+// Draw the text in the game over screen
+void draw_game_over_text(const Player *player, const Constants *constants) {
+  draw_text_anchored(constants->game_font, "GAME OVER", (Vector2){0, -3}, 0.8, constants->font_spacing, MAROON,
+                     ANCHOR_CENTRE, constants);
+  draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0, -2}, 0.5,
+                     constants->font_spacing, BLACK, ANCHOR_CENTRE, constants);
+}
 /*---------------------------------------------------------------------------------------------------------------*/
 
 int main() {
   /*--------------------------*/
   /* Constants initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
-  Constants constants = {.screen_width = 1280,
-                         .screen_height = 720,
+  Constants constants = {.initial_screen_width_in_pixels = 1280,
+                         .initial_screen_height_in_pixels = 720,
+                         .aspect_ratio = 16.0 / 9.0,
+                         .screen_width_in_units = 16,
+                         .screen_height_in_units = 9,
                          .target_fps = 240,
 
-                         .player_start_pos = {640, 360},
-                         .player_base_speed = 500,
-                         .player_base_size = 20,
+                         .player_start_pos = {8, 4.5},
+                         .player_base_speed = 7,
+                         .player_base_size = 0.33,
                          .player_colour = VIOLET,
 
                          .player_base_firerate = 2,
-                         .player_base_projectile_speed = 600,
-                         .player_base_projectile_size = 7,
+                         .player_base_projectile_speed = 8,
+                         .player_base_projectile_size = 0.12,
                          .player_projectile_colour = DARKGRAY,
 
                          .upgrade_cost_multiplier = 1.5,
@@ -828,29 +962,29 @@ int main() {
                          .font_spacing = 2};
 
   const EnemyType enemy_types[] = {{.credit_cost = 1,
-                                    .min_speed = 100,
-                                    .max_speed = 140,
-                                    .min_size = 20,
-                                    .max_size = 30,
+                                    .min_speed = 2.5,
+                                    .max_speed = 3,
+                                    .min_size = 0.27,
+                                    .max_size = 0.29,
                                     .colour = RED,
                                     .turns_into = NULL},
                                    {.credit_cost = 3,
-                                    .min_speed = 160,
-                                    .max_speed = 200,
-                                    .min_size = 25,
-                                    .max_size = 35,
+                                    .min_speed = 3,
+                                    .max_speed = 3.5,
+                                    .min_size = 0.28,
+                                    .max_size = 0.31,
                                     .colour = SKYBLUE,
                                     .turns_into = enemy_types + 0},
                                    {.credit_cost = 7,
-                                    .min_speed = 200,
-                                    .max_speed = 240,
-                                    .min_size = 30,
-                                    .max_size = 40,
+                                    .min_speed = 3.5,
+                                    .max_speed = 4,
+                                    .min_size = 0.30,
+                                    .max_size = 0.34,
                                     .colour = LIME,
                                     .turns_into = enemy_types + 1}};
   /*-------------------------------------------------------------------------------------------------------------*/
 
-  InitWindow(constants.screen_width, constants.screen_height, "Shooter Game");
+  InitWindow(constants.initial_screen_width_in_pixels, constants.initial_screen_height_in_pixels, "Shooter Game");
   SetTargetFPS(constants.target_fps);
 
   if (DEBUG == 1) {
@@ -862,45 +996,45 @@ int main() {
   /*-------------------*/
   /* UI initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
-  Button button_start_screen_start = {.bounds = {0, -100, 250, 100},
+  Button button_start_screen_start = {.bounds = {0, -1, 3, 1.2},
                                       .anchor_type = ANCHOR_CENTRE,
                                       .text = "START",
                                       .body_colour_default = YELLOW,
                                       .body_colour_hover = GOLD,
                                       .body_colour_pressed = ORANGE,
                                       .text_colour = BLACK,
-                                      .font_size = 50};
+                                      .font_size = 0.6};
 
   // It is convenient for me to create some buttons by simply copying a previous button and changing some values
   Button button_start_screen_shop = button_start_screen_start;
-  button_start_screen_shop.bounds.y += 200;
+  button_start_screen_shop.bounds.y += 2.5;
   button_start_screen_shop.text = "SHOP";
 
-  Button button_shop_screen_back = {.bounds = {20, -20, 100, 50},
+  Button button_shop_screen_back = {.bounds = {0.25, -0.25, 1.2, 0.5},
                                     .anchor_type = ANCHOR_BOTTOM_LEFT,
                                     .text = "BACK",
                                     .body_colour_default = YELLOW,
                                     .body_colour_hover = GOLD,
                                     .body_colour_pressed = ORANGE,
                                     .text_colour = BLACK,
-                                    .font_size = 30};
+                                    .font_size = 0.28};
 
   // The first purchase button is created manually, and the others are identical but shifted down
-  Button buttons_shop_purchase[NUM_UPGRADES] = {{.bounds = {20, 40, 70, 50},
+  Button buttons_shop_purchase[NUM_UPGRADES] = {{.bounds = {0.18, 0.58, 0.94, 0.5},
                                                  .anchor_type = ANCHOR_TOP_LEFT,
                                                  .text = "price",
                                                  .body_colour_default = GREEN,
                                                  .body_colour_hover = LIME,
                                                  .body_colour_pressed = DARKGREEN,
                                                  .text_colour = BLACK,
-                                                 .font_size = 20}};
+                                                 .font_size = 0.25}};
   buttons_shop_purchase[1] = buttons_shop_purchase[0];
-  buttons_shop_purchase[1].bounds.y += 80;
+  buttons_shop_purchase[1].bounds.y += 1;
   buttons_shop_purchase[2] = buttons_shop_purchase[1];
-  buttons_shop_purchase[2].bounds.y += 80;
+  buttons_shop_purchase[2].bounds.y += 1;
 
   Button button_end_screen_back = button_start_screen_start;
-  button_end_screen_back.bounds.y += 200;
+  button_end_screen_back.bounds.y += 2.5;
   button_end_screen_back.text = "GO BACK";
   /*-------------------------------------------------------------------------------------------------------------*/
 
@@ -954,7 +1088,7 @@ int main() {
       case GAME_SCREEN_GAME:
         player_update_position(&player, &constants);
 
-        player_try_to_spawn_projectile(&player, &projectile_manager);
+        player_try_to_spawn_projectile(&player, &projectile_manager, &constants);
         projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager, &player);
         projectile_manager_update_projectile_positions(&projectile_manager, &constants);
 
@@ -1034,9 +1168,9 @@ int main() {
         /* Game screen drawing */
         /*-------------------------------------------------------------------------------------------------------*/
         case GAME_SCREEN_GAME:
-          draw_projectiles(&projectile_manager);
-          draw_enemies(&enemy_manager);
-          draw_player(&player);
+          draw_projectiles(&projectile_manager, &constants);
+          draw_enemies(&enemy_manager, &constants);
+          draw_player(&player, &constants);
 
           draw_score_and_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
           break;
@@ -1056,14 +1190,13 @@ int main() {
         /* End screen drawing */
         /*-------------------------------------------------------------------------------------------------------*/
         case GAME_SCREEN_END:
-          draw_text_centred(constants.game_font, "GAME OVER", (Vector2){0.5 * constants.screen_width, 200}, 50,
-                            constants.font_spacing, MAROON);
-          draw_text_centred(constants.game_font, TextFormat("Score: %d", player.score),
-                            (Vector2){0.5 * constants.screen_width, 270}, 40, constants.font_spacing, BLACK);
+          draw_game_over_text(&player, &constants);
           draw_button(&button_end_screen_back, &constants);
           break;
           /*-----------------------------------------------------------------------------------------------------*/
       }
+
+      draw_black_bars(&constants);
     }
     EndDrawing();
     /*-----------------------------------------------------------------------------------------------------------*/
