@@ -1005,7 +1005,7 @@ int main() {
                                     .turns_into = enemy_types + 1}};
   /*-------------------------------------------------------------------------------------------------------------*/
 
-  InitWindow(constants.initial_screen_width_in_pixels, constants.initial_screen_height_in_pixels, "Shooter Game");
+  InitWindow(constants.initial_screen_width_in_pixels, constants.initial_screen_height_in_pixels, "Loop Shooter");
   SetTargetFPS(constants.target_fps);
 
   if (DEBUG == 1) {

@@ -1,15 +1,23 @@
 cmake_minimum_required(VERSION 3.11)
-project(game)
+project(loop_shooter)
+set(PROJECT_FOLDER src)
 
-set(project_folder src)
-set(CMAKE_CXX_FLAGS_DEBUG_INIT, )
+if (NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
 
-# Set flags 
+message("Generated with build type: ${CMAKE_BUILD_TYPE}")
+
+# Set flags for debug and release builds
 add_compile_options(
   "-Wall"
   "$<$<CONFIG:DEBUG>:-O0;-g3;-DDEBUG=1>"
-  "$<$<CONFIG:RELEASE>:-O2;-DNDEBUG>"
+  "$<$<CONFIG:RELEASE>:-O2>"
 )
+
+# Set C standard
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED TRUE)
 
 # Dependencies
 set(RAYLIB_VERSION 5.5)
@@ -28,6 +36,6 @@ if (NOT raylib_FOUND) # If there's none, fetch and build raylib
   endif()
 endif()
 
-add_executable(${PROJECT_NAME} src/game.c)
+add_executable(${PROJECT_NAME} ${PROJECT_FOLDER}/game.c)
 target_link_libraries(${PROJECT_NAME} raylib)
 
