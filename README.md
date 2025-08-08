@@ -22,7 +22,7 @@ The game can be built using [CMake](https://cmake.org/download/). There are Debu
 - **Release**
     - Compiler optimisations set to level 2
 
-To build the game do (starting in the base directory):
+To build the game, do (starting in the base directory):
 ```console
 # Make a build directory to house CMake files and raylib installation
 mkdir build
@@ -38,4 +38,7 @@ cmake --build .
 ```
 
 Then just run the produced executable `loop_shooter`(`.exe`).
+
+> [!Note]
+> I'm not sure if this works with Visual Studio on Windows. To use GCC on Windows, add the `-G "MinGW Makefiles"` flag to the first CMake command.
 
