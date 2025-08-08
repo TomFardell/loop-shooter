@@ -598,9 +598,12 @@ void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, const P
 
 // Update the positions of all active enemies according to their movements
 void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
-  for (int i = 0; i < enemy_manager->capacity; i++) {
+  for (int i = 0, enemies_counted = 0; i < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count;
+       i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
     if (!this_enemy->is_active) continue;
+
+    enemies_counted++;  // Keep track of enemies processed so we can exit the loop early
 
     // Move the enemy towards its desired position according to its speedA
     Vector2 normalised_move_direction =
@@ -612,9 +615,12 @@ void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
 
 // Get whether an enemy is currently colliding with the player
 bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, const Player *player) {
-  for (int i = 0; i < enemy_manager->capacity; i++) {
+  for (int i = 0, enemies_counted = 0; i < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count;
+       i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
     if (!this_enemy->is_active) continue;
+
+    enemies_counted++;
 
     if (!CheckCollisionCircles(this_enemy->pos, this_enemy->size, player->pos, player->size)) continue;
 
@@ -634,9 +640,12 @@ bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, c
 // Update projectile positions according to their trajectories
 void projectile_manager_update_projectile_positions(ProjectileManager *projectile_manager,
                                                     const Constants *constants) {
-  for (int i = 0; i < projectile_manager->capacity; i++) {
+  for (int i = 0, projectiles_counted = 0;
+       i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
     Projectile *this_projectile = projectile_manager->projectiles + i;
     if (!this_projectile->is_active) continue;
+
+    projectiles_counted++;
 
     // Move the projectile along its trajectory according to its speed
     this_projectile->pos = Vector2Add(this_projectile->pos,
@@ -653,13 +662,19 @@ void projectile_manager_update_projectile_positions(ProjectileManager *projectil
 // Check whether any projectile is collided with an enemy, destroying both if this is the case
 void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *projectile_manager,
                                                           EnemyManager *enemy_manager, Player *player) {
-  for (int i = 0; i < projectile_manager->capacity; i++) {
+  for (int i = 0, projectiles_counted = 0;
+       i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
     Projectile *this_projectile = projectile_manager->projectiles + i;
     if (!this_projectile->is_active) continue;
 
-    for (int j = 0; j < enemy_manager->capacity; j++) {
+    projectiles_counted++;
+
+    for (int j = 0, enemies_counted = 0;
+         j < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count; j++) {
       Enemy *this_enemy = enemy_manager->enemies + j;
       if (!this_enemy->is_active) continue;
+
+      enemies_counted++;
 
       if (!CheckCollisionCircles(this_projectile->pos, this_projectile->size, this_enemy->pos, this_enemy->size))
         continue;
@@ -727,9 +742,12 @@ void draw_player(const Player *player, const Constants *constants) {
 
 // Draw the active enemies to the canvas
 void draw_enemies(const EnemyManager *enemy_manager, const Constants *constants) {
-  for (int i = 0; i < enemy_manager->capacity; i++) {
+  for (int i = 0, enemies_counted = 0; i < enemy_manager->capacity && enemies_counted < enemy_manager->capacity;
+       i++) {
     Enemy this_enemy = enemy_manager->enemies[i];
     if (!this_enemy.is_active) continue;
+
+    enemies_counted++;
 
     DrawCircleV(get_draw_position_from_unit_position(this_enemy.pos, constants),
                 get_draw_length_from_unit_length(this_enemy.size, constants), this_enemy.type->colour);
@@ -738,9 +756,12 @@ void draw_enemies(const EnemyManager *enemy_manager, const Constants *constants)
 
 // Draw the active projectiles to the canvas
 void draw_projectiles(const ProjectileManager *projectile_manager, const Constants *constants) {
-  for (int i = 0; i < projectile_manager->capacity; i++) {
+  for (int i = 0, projectiles_counted = 0;
+       i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
     Projectile this_projectile = projectile_manager->projectiles[i];
     if (!this_projectile.is_active) continue;
+
+    projectiles_counted++;
 
     DrawCircleV(get_draw_position_from_unit_position(this_projectile.pos, constants),
                 get_draw_length_from_unit_length(this_projectile.size, constants), this_projectile.colour);
