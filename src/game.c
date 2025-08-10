@@ -31,11 +31,10 @@ typedef enum AnchorPosition {
 /* Structs */
 /*---------------------------------------------------------------------------------------------------------------*/
 typedef struct Constants {
-  int initial_screen_width_in_pixels;   // Initial game window width in pixels
-  int initial_screen_height_in_pixels;  // Initial game window height in pixels
-  float aspect_ratio;                   // Aspect ratio to keep the game at (we draw black bars to maintain this)
-  float screen_width_in_units;          // Number of units in one screen's width
-  float screen_height_in_units;         // Number of units in one screen's height
+  Vector2 initial_window_resolution;  // Initial game window dimensions in pixels
+  float aspect_ratio;                 // Aspect ratio to keep the game at (we draw black bars to maintain this)
+  Vector2 screen_dimensions;          // Dimensions of the displayed portion of the play space in units
+  Vector2 game_area_dimensions;       // Dimensions of the game area (in units)
 
   int target_fps;  // Target frames per second of the game
 
@@ -67,8 +66,11 @@ typedef struct Constants {
 
   int max_projectiles;  // Maximum number of projectiles. This number should not be reached
 
-  Font game_font;      // Font used for in-game text
-  float font_spacing;  // Spacing of the in-game font
+  Font game_font;                  // Font used for in-game text
+  float font_spacing;              // Spacing of the in-game font
+  float background_square_size;    // Side length (in units) of the squares in the background of the game
+  Color background_square_colour;  // Colour of the squares in the background of the game
+  Color background_colour;         // Colour of the background of the game
 } Constants;
 
 typedef struct Player {
@@ -175,9 +177,9 @@ float get_random_float(float min, float max) {
 }
 
 // Get whether a given circle with centre `pos` and radius `rad` would be showing on the screen
-bool circle_is_on_screen(Vector2 pos, float rad, const Constants *constants) {
-  return (-rad <= pos.x && pos.x <= constants->screen_width_in_units + rad) &&
-         (-rad <= pos.y && pos.y <= constants->screen_height_in_units + rad);
+bool circle_is_on_screen(Vector2 pos, float rad, Vector2 camera_pos, const Constants *constants) {
+  return (-rad <= pos.x - camera_pos.x && pos.x - camera_pos.x <= constants->screen_dimensions.x + rad) &&
+         (-rad <= pos.y - camera_pos.y && pos.y - camera_pos.y <= constants->screen_dimensions.y + rad);
 };
 
 // Get the centre of a given rectangle given in vectors form
@@ -198,8 +200,8 @@ Vector2 get_pos_from_anchored_vectors(Vector2 anchored_pos, Vector2 dimensions, 
   int grid_y = anchor_type / 3;
 
   // With multiplicities depending on anchor, shift forwards by screen dimensions, and back by rectangle dimensions
-  return (Vector2){anchored_pos.x + 0.5 * grid_x * (constants->screen_width_in_units - dimensions.x),
-                   anchored_pos.y + 0.5 * grid_y * (constants->screen_height_in_units - dimensions.y)};
+  return (Vector2){anchored_pos.x + 0.5 * grid_x * (constants->screen_dimensions.x - dimensions.x),
+                   anchored_pos.y + 0.5 * grid_y * (constants->screen_dimensions.y - dimensions.y)};
 }
 
 // Given a rectangle whose position is relative to an anchor, get the actual position of the top left corner
@@ -233,9 +235,9 @@ float get_units_to_pixels_scale_factor(const Constants *constants) {
 
   // Calculate screen size in pixels (i.e. the viewable portion of the window) divided by screen size in units
   if (black_bar_size >= 0) {  // If there are vertical (or no) black bars, use height
-    return GetScreenHeight() / constants->screen_height_in_units;
+    return GetScreenHeight() / constants->screen_dimensions.y;
   } else {  // If there are horizontal black bars, use width
-    return GetScreenWidth() / constants->screen_width_in_units;
+    return GetScreenWidth() / constants->screen_dimensions.x;
   }
 }
 // Convert a position in units to a position in pixels (for drawing), accounting for black bars
@@ -280,8 +282,13 @@ float get_draw_length_from_unit_length(float length, const Constants *constants)
   return length * get_units_to_pixels_scale_factor(constants);
 }
 
-// GetMousePosition from raylib, but with the result in units
-Vector2 get_mouse_position_in_units(const Constants *constants) {
+// GetMousePosition from raylib, but with the result in units (and accounting for the camera)
+Vector2 get_mouse_position_in_units_game(Vector2 camera_position, const Constants *constants) {
+  return Vector2Add(get_unit_position_from_draw_position(GetMousePosition(), constants), camera_position);
+}
+
+// GetMousePosition from raylib, but with the result in units, ignoring the camera position
+Vector2 get_mouse_position_in_units_ui(const Constants *constants) {
   return get_unit_position_from_draw_position(GetMousePosition(), constants);
 }
 
@@ -290,6 +297,17 @@ Vector2 measure_text_ex_in_units(Font font, const char *text, float size, float 
                                  const Constants *constants) {
   return get_unit_dimensions_from_draw_dimensions(
       MeasureTextEx(font, text, get_draw_length_from_unit_length(size, constants), spacing), constants);
+}
+
+// Get the normalised vector for the direction the player should move according to keyboard input
+Vector2 get_movement_input_direction() {
+  Vector2 res = {0};
+  if (IsKeyDown(KEY_S)) res.y++;
+  if (IsKeyDown(KEY_W)) res.y--;
+  if (IsKeyDown(KEY_D)) res.x++;
+  if (IsKeyDown(KEY_A)) res.x--;
+
+  return Vector2Normalize(res);  // Normalise to prevent diagonal movement being quicker
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
@@ -363,38 +381,27 @@ void cleanup_game(EnemyManager *enemy_manager, ProjectileManager *projectile_man
 /* Player actions */
 /*---------------------------------------------------------------------------------------------------------------*/
 
-// Get the normalised vector for the direction the player should move according to keyboard input
-Vector2 player_get_input_direction() {
-  Vector2 res = {0};
-  if (IsKeyDown(KEY_S)) res.y++;
-  if (IsKeyDown(KEY_W)) res.y--;
-  if (IsKeyDown(KEY_D)) res.x++;
-  if (IsKeyDown(KEY_A)) res.x--;
-
-  return Vector2Normalize(res);  // Normalise to prevent diagonal movement being quicker
-}
-
 // Update the player's position according to keyboard input
 void player_update_position(Player *player, const Constants *constants) {
   player->pos =
-      Vector2Add(player->pos, Vector2Scale(player_get_input_direction(), player->speed * GetFrameTime()));
+      Vector2Add(player->pos, Vector2Scale(get_movement_input_direction(), player->speed * GetFrameTime()));
 
   // Clamp the player inside the screen boundaries
-  Vector2 min_player_pos = {player->size, player->size};
-  Vector2 max_player_pos = {constants->screen_width_in_units - player->size,
-                            constants->screen_height_in_units - player->size};
+  Vector2 min_player_pos = Vector2Subtract(Vector2Scale(Vector2One(), player->size),
+                                           Vector2Scale(constants->game_area_dimensions, 0.5));
+  Vector2 max_player_pos = Vector2Negate(min_player_pos);  // Game area dimensions are symmetrical
   player->pos = Vector2Clamp(player->pos, min_player_pos, max_player_pos);
 }
 
 // Generate a new projectile that moves towards the mouse
-Projectile projectile_generate(const Player *player, const Constants *constants) {
+Projectile projectile_generate(const Player *player, Vector2 camera_position, const Constants *constants) {
   Projectile projectile = {.pos = player->pos,
                            .is_active = true,
                            .speed = player->projectile_speed,
                            .size = player->projectile_size,
                            .colour = player->projectile_colour};
 
-  Vector2 mouse_pos = get_mouse_position_in_units(constants);
+  Vector2 mouse_pos = get_mouse_position_in_units_game(camera_position, constants);
 
   // If the mouse is on the player, just fire in an arbitrary direction, otherwise fire towards the mouse
   if (Vector2Equals(mouse_pos, player->pos))
@@ -406,7 +413,7 @@ Projectile projectile_generate(const Player *player, const Constants *constants)
 }
 
 // Spawn a new projectile when it is time to do so and if the correct button is down
-void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager,
+void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager, Vector2 camera_position,
                                     const Constants *constants) {
   // The projectile manager should have capacity large enough that it never becomes full
   assert((projectile_manager->projectile_count < projectile_manager->capacity) &&
@@ -421,7 +428,7 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
 
   for (int i = 0; i < projectile_manager->capacity; i++) {
     if (!projectile_manager->projectiles[i].is_active) {
-      projectile_manager->projectiles[i] = projectile_generate(player, constants);
+      projectile_manager->projectiles[i] = projectile_generate(player, camera_position, constants);
       projectile_manager->projectile_count++;
       break;
     }
@@ -446,37 +453,35 @@ float enemy_manager_calculate_credits(const EnemyManager *enemy_manager, const C
          enemy_manager->credits_spent + constants->initial_enemy_credits;
 }
 
-// Randomly generate a starting position of an enemy. Enemies spawn touching the outside faces of the play area
-Vector2 enemy_get_random_start_pos(float enemy_size, const Constants *constants) {
-  int vert_or_horiz = GetRandomValue(0, 1);  // Choose to spawn on either the two vertical or two horizontal sides
-  int side_chosen = GetRandomValue(1, 1);    // Choose which of the two sides chosen above to spawn on
-  int x_val = get_random_float(0, constants->screen_width_in_units);
-  int y_val = get_random_float(0, constants->screen_height_in_units);
+// Randomly generate a starting position of an enemy. Enemies spawn in the game area but off the screen
+Vector2 enemy_get_random_start_pos(float enemy_size, Vector2 camera_position, const Constants *constants) {
+  for (;;) {
+    Vector2 position = {
+        get_random_float(-constants->game_area_dimensions.x / 2, constants->game_area_dimensions.x / 2),
+        get_random_float(-constants->game_area_dimensions.y / 2, constants->game_area_dimensions.y / 2)};
 
-  // Use the numbers generated above to pick a random position on the edges of the play area (plus one enemy width)
-  return (Vector2){
-      vert_or_horiz * x_val +
-          !vert_or_horiz * (side_chosen * (constants->screen_width_in_units + 2 * enemy_size) - enemy_size),
-      !vert_or_horiz * y_val +
-          vert_or_horiz * (side_chosen * (constants->screen_height_in_units + 2 * enemy_size) - enemy_size)};
+    if (!circle_is_on_screen(position, enemy_size, camera_position, constants)) return position;
+  }
 }
 
 // Randomly generate a new enemy
-Enemy enemy_generate(const EnemyType *enemy_type, const Player *player, const Constants *constants) {
+Enemy enemy_generate(const EnemyType *enemy_type, const Player *player, Vector2 camera_position,
+                     const Constants *constants) {
   Enemy enemy = {.desired_pos = player->pos,
                  .is_active = true,
                  .speed = get_random_float(enemy_type->min_speed, enemy_type->max_speed),
                  .size = get_random_float(enemy_type->min_size, enemy_type->max_size),
                  .type = enemy_type};
 
-  enemy.pos = enemy_get_random_start_pos(enemy.size, constants);
+  enemy.pos = enemy_get_random_start_pos(enemy.size, camera_position, constants);
 
   return enemy;
 }
 
 // Try to create and spawn a new wave of enemies (if it is time to do so)
 void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const EnemyType *enemy_types,
-                                        const Player *player, const Constants *constants) {
+                                        const Player *player, Vector2 camera_position,
+                                        const Constants *constants) {
   // If it has not been long enough since the last enemy, do nothing
   float time_since_last_enemy = GetTime() - enemy_manager->time_of_last_spawn;
   if (time_since_last_enemy < enemy_manager->enemy_spawn_interval) return;
@@ -557,7 +562,8 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
     // Loop through the enemy slots until an inactive enemy is found and replace with an enemy of the desired type
     for (int j = 0; j < enemy_manager->capacity; j++) {
       if (!enemy_manager->enemies[j].is_active) {
-        enemy_manager->enemies[j] = enemy_generate(enemy_types + wave_enemy_types[i], player, constants);
+        enemy_manager->enemies[j] =
+            enemy_generate(enemy_types + wave_enemy_types[i], player, camera_position, constants);
         enemy_manager->enemy_count++;
         break;
       }
@@ -638,7 +644,7 @@ bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, c
 /*---------------------------------------------------------------------------------------------------------------*/
 
 // Update projectile positions according to their trajectories
-void projectile_manager_update_projectile_positions(ProjectileManager *projectile_manager,
+void projectile_manager_update_projectile_positions(ProjectileManager *projectile_manager, Vector2 camera_position,
                                                     const Constants *constants) {
   for (int i = 0, projectiles_counted = 0;
        i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
@@ -652,7 +658,7 @@ void projectile_manager_update_projectile_positions(ProjectileManager *projectil
                                       Vector2Scale(this_projectile->dir, this_projectile->speed * GetFrameTime()));
 
     // If the projectile has moved outside the game boundaries, make it inactive
-    if (!circle_is_on_screen(this_projectile->pos, this_projectile->size, constants)) {
+    if (!circle_is_on_screen(this_projectile->pos, this_projectile->size, camera_position, constants)) {
       this_projectile->is_active = false;
       projectile_manager->projectile_count--;
     }
@@ -698,6 +704,18 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
+/*---------------------*/
+/* Camera calculations */
+/*---------------------------------------------------------------------------------------------------------------*/
+
+void camera_update_position(Vector2 *camera_position, const Player *player, const Constants *constants) {
+  Vector2 minimum_position =
+      Vector2Scale(Vector2Subtract(constants->screen_dimensions, constants->game_area_dimensions), 0.5);
+  Vector2 maximum_position = Vector2Negate(minimum_position);
+  Vector2 offset_amount = Vector2Scale(constants->screen_dimensions, 0.5);
+  *camera_position = Vector2Subtract(Vector2Clamp(player->pos, minimum_position, maximum_position), offset_amount);
+}
+
 /*---------------*/
 /* UI processing */
 /*---------------------------------------------------------------------------------------------------------------*/
@@ -707,7 +725,7 @@ void button_check_user_interaction(Button *button, const Constants *constants) {
   Vector2 unanchored_pos = get_pos_from_anchored_rect(button->bounds, button->anchor_type, constants);
   Rectangle unanchored_bounds = {unanchored_pos.x, unanchored_pos.y, button->bounds.width, button->bounds.height};
 
-  if (CheckCollisionPointRec(get_mouse_position_in_units(constants), unanchored_bounds)) {
+  if (CheckCollisionPointRec(get_mouse_position_in_units_ui(constants), unanchored_bounds)) {
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
       button->state = BUTTON_STATE_PRESSED;
     else
@@ -735,13 +753,14 @@ void shop_try_to_purchase_upgrade(Shop *shop, Upgrade *upgrade, const Constants 
 /*---------------------------------------------------------------------------------------------------------------*/
 
 // Draw the player to the canvas
-void draw_player(const Player *player, const Constants *constants) {
-  DrawCircleV(get_draw_position_from_unit_position(player->pos, constants),
+void draw_player(const Player *player, Vector2 camera_position, const Constants *constants) {
+  Vector2 offset_position = Vector2Subtract(player->pos, camera_position);
+  DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
               get_draw_length_from_unit_length(player->size, constants), player->colour);
 }
 
 // Draw the active enemies to the canvas
-void draw_enemies(const EnemyManager *enemy_manager, const Constants *constants) {
+void draw_enemies(const EnemyManager *enemy_manager, Vector2 camera_position, const Constants *constants) {
   for (int i = 0, enemies_counted = 0; i < enemy_manager->capacity && enemies_counted < enemy_manager->capacity;
        i++) {
     Enemy this_enemy = enemy_manager->enemies[i];
@@ -749,13 +768,17 @@ void draw_enemies(const EnemyManager *enemy_manager, const Constants *constants)
 
     enemies_counted++;
 
-    DrawCircleV(get_draw_position_from_unit_position(this_enemy.pos, constants),
-                get_draw_length_from_unit_length(this_enemy.size, constants), this_enemy.type->colour);
+    Vector2 offset_position = Vector2Subtract(this_enemy.pos, camera_position);
+
+    if (circle_is_on_screen(this_enemy.pos, this_enemy.size, camera_position, constants))
+      DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
+                  get_draw_length_from_unit_length(this_enemy.size, constants), this_enemy.type->colour);
   }
 }
 
 // Draw the active projectiles to the canvas
-void draw_projectiles(const ProjectileManager *projectile_manager, const Constants *constants) {
+void draw_projectiles(const ProjectileManager *projectile_manager, Vector2 camera_position,
+                      const Constants *constants) {
   for (int i = 0, projectiles_counted = 0;
        i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
     Projectile this_projectile = projectile_manager->projectiles[i];
@@ -763,8 +786,37 @@ void draw_projectiles(const ProjectileManager *projectile_manager, const Constan
 
     projectiles_counted++;
 
-    DrawCircleV(get_draw_position_from_unit_position(this_projectile.pos, constants),
-                get_draw_length_from_unit_length(this_projectile.size, constants), this_projectile.colour);
+    Vector2 offset_position = Vector2Subtract(this_projectile.pos, camera_position);
+
+    if (circle_is_on_screen(this_projectile.pos, this_projectile.size, camera_position, constants))
+      DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
+                  get_draw_length_from_unit_length(this_projectile.size, constants), this_projectile.colour);
+  }
+}
+
+void draw_background_squares(Vector2 camera_position, const Constants *constants) {
+  // Quotient and remainder are taken with respect to division by a square length
+  Vector2 camera_quotient = {floor(camera_position.x / constants->background_square_size),
+                             floor(camera_position.y / constants->background_square_size)};
+  Vector2 camera_remainder =
+      Vector2Subtract(camera_position, Vector2Scale(camera_quotient, constants->background_square_size));
+
+  int screen_width_in_squares = constants->screen_dimensions.x / constants->background_square_size + 2;
+  int screen_height_in_squares = constants->screen_dimensions.y / constants->background_square_size + 2;
+
+  for (int x = 0; x < screen_width_in_squares; x++) {
+    for (int y = 0; y < screen_height_in_squares; y++) {
+      // Alternate in a grid pattern whether to draw the background squares
+      if ((x + y + (int)camera_quotient.x + (int)camera_quotient.y) % 2 == 0) continue;
+
+      Vector2 square_position =
+          Vector2Subtract(Vector2Scale((Vector2){x, y}, constants->background_square_size), camera_remainder);
+      Vector2 square_dimensions = Vector2Scale(Vector2One(), constants->background_square_size);
+
+      DrawRectangleV(get_draw_position_from_unit_position(square_position, constants),
+                     get_draw_dimensions_from_unit_dimensions(square_dimensions, constants),
+                     constants->background_square_colour);
+    }
   }
 }
 /*---------------------------------------------------------------------------------------------------------------*/
@@ -945,14 +997,13 @@ int main() {
   /*--------------------------*/
   /* Constants initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
-  Constants constants = {.initial_screen_width_in_pixels = 1280,
-                         .initial_screen_height_in_pixels = 720,
+  Constants constants = {.initial_window_resolution = {1280, 720},
                          .aspect_ratio = 16.0 / 9.0,
-                         .screen_width_in_units = 16,
-                         .screen_height_in_units = 9,
+                         .screen_dimensions = {16, 9},
+                         .game_area_dimensions = {64, 64},
                          .target_fps = 240,
 
-                         .player_start_pos = {8, 4.5},
+                         .player_start_pos = {0},
                          .player_base_speed = 7,
                          .player_base_size = 0.33,
                          .player_colour = VIOLET,
@@ -968,19 +1019,22 @@ int main() {
                          .num_enemy_types = 3,
                          .enemy_spawn_interval_min = 3.5,
                          .enemy_spawn_interval_max = 4.5,
-                         .enemy_first_spawn_interval = 2.0,
+                         .enemy_first_spawn_interval = 1.0,
                          .enemy_spawn_min_wave_size = 3,
                          .enemy_spawn_additional_enemy_chance = 0.3,
                          .initial_enemy_credits = 2.8,
-                         .enemy_credit_multiplier = 0.2,
-                         .enemy_credit_exponent = 1.5,
+                         .enemy_credit_multiplier = 0.3,
+                         .enemy_credit_exponent = 1.7,
 
                          .enemy_update_interval = 0.2,
                          .enemy_update_chance = 0.02,
 
                          .max_projectiles = 40,
 
-                         .font_spacing = 2};
+                         .font_spacing = 2,
+                         .background_square_size = 2,
+                         .background_colour = WHITE,
+                         .background_square_colour = RAYWHITE};
 
   const EnemyType enemy_types[] = {{.credit_cost = 1,
                                     .min_speed = 2.5,
@@ -1005,7 +1059,7 @@ int main() {
                                     .turns_into = enemy_types + 1}};
   /*-------------------------------------------------------------------------------------------------------------*/
 
-  InitWindow(constants.initial_screen_width_in_pixels, constants.initial_screen_height_in_pixels, "Loop Shooter");
+  InitWindow(constants.initial_window_resolution.x, constants.initial_window_resolution.y, "Loop Shooter");
   SetTargetFPS(constants.target_fps);
 
   if (DEBUG == 1) {
@@ -1073,6 +1127,8 @@ int main() {
 
   initialise_game(&player, &enemy_manager, &projectile_manager, &constants);
 
+  Vector2 camera_position;
+
   bool show_debug_text = false;
   GameScreen game_screen = GAME_SCREEN_START;
   /*-------------------------------------------------------------------------------------------------------------*/
@@ -1108,12 +1164,13 @@ int main() {
       /*---------------------------------------------------------------------------------------------------------*/
       case GAME_SCREEN_GAME:
         player_update_position(&player, &constants);
+        camera_update_position(&camera_position, &player, &constants);
 
-        player_try_to_spawn_projectile(&player, &projectile_manager, &constants);
+        player_try_to_spawn_projectile(&player, &projectile_manager, camera_position, &constants);
         projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager, &player);
-        projectile_manager_update_projectile_positions(&projectile_manager, &constants);
+        projectile_manager_update_projectile_positions(&projectile_manager, camera_position, &constants);
 
-        enemy_manager_try_to_spawn_enemies(&enemy_manager, enemy_types, &player, &constants);
+        enemy_manager_try_to_spawn_enemies(&enemy_manager, enemy_types, &player, camera_position, &constants);
         enemy_manager_update_desired_positions(&enemy_manager, &player, &constants);
         enemy_manager_update_enemy_positions(&enemy_manager);
 
@@ -1173,7 +1230,7 @@ int main() {
     /*-----------------------------------------------------------------------------------------------------------*/
     BeginDrawing();
     {
-      ClearBackground(RAYWHITE);
+      ClearBackground(constants.background_colour);
 
       switch (game_screen) {
         /*-----------------------*/
@@ -1189,9 +1246,10 @@ int main() {
         /* Game screen drawing */
         /*-------------------------------------------------------------------------------------------------------*/
         case GAME_SCREEN_GAME:
-          draw_projectiles(&projectile_manager, &constants);
-          draw_enemies(&enemy_manager, &constants);
-          draw_player(&player, &constants);
+          draw_background_squares(camera_position, &constants);
+          draw_projectiles(&projectile_manager, camera_position, &constants);
+          draw_enemies(&enemy_manager, camera_position, &constants);
+          draw_player(&player, camera_position, &constants);
 
           draw_score_and_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
           break;
