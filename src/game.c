@@ -50,7 +50,7 @@ typedef struct Constants {
 
   float upgrade_cost_multiplier;  // Multiplier applied to the cost of successive upgrades in the shop
 
-  int max_enemies;                   // Maximum number of enemies. Enemies stop spawning when this is reached
+  int initial_max_enemies;           // Maximum number of enemies. Enemies stop spawning when this is reached
   int num_enemy_types;               // How many different types of enemies are in existence
   float enemy_spawn_interval_min;    // Minimum time between enemy spawns
   float enemy_spawn_interval_max;    // Maximum time between enemy spawns
@@ -64,7 +64,7 @@ typedef struct Constants {
   float enemy_update_interval;  // Time interval between attempts at updating the enemy's desired position
   float enemy_update_chance;    // Chance (each update) that the enemy updates its desired position
 
-  int max_projectiles;  // Maximum number of projectiles. This number should not be reached
+  int initial_max_projectiles;  // Maximum number of projectiles. This number should not be reached
 
   Font game_font;                  // Font used for in-game text
   float font_spacing;              // Spacing of the in-game font
@@ -181,6 +181,13 @@ bool circle_is_on_screen(Vector2 pos, float rad, Vector2 camera_pos, const Const
   return (-rad <= pos.x - camera_pos.x && pos.x - camera_pos.x <= constants->screen_dimensions.x + rad) &&
          (-rad <= pos.y - camera_pos.y && pos.y - camera_pos.y <= constants->screen_dimensions.y + rad);
 };
+
+bool circle_is_in_game_area(Vector2 pos, float rad, const Constants *constants) {
+  return (-constants->game_area_dimensions.x / 2 <= pos.x + rad &&
+          pos.x - rad <= constants->game_area_dimensions.x / 2) &&
+         (-constants->game_area_dimensions.y / 2 <= pos.y + rad &&
+          pos.y - rad <= constants->game_area_dimensions.y / 2);
+}
 
 // Get the centre of a given rectangle given in vectors form
 Vector2 get_rectangle_centre_v(Vector2 pos, Vector2 dimensions) {
@@ -326,19 +333,20 @@ void initialise_game(Player *player, EnemyManager *enemy_manager, ProjectileMana
   player->projectile_size = constants->player_base_projectile_size;
   player->projectile_colour = constants->player_projectile_colour;
 
-  enemy_manager->enemies = calloc(constants->max_enemies, sizeof *(enemy_manager->enemies));
+  enemy_manager->enemies = calloc(constants->initial_max_enemies, sizeof *(enemy_manager->enemies));
   if (!enemy_manager->enemies) {
     fprintf(stderr, "Unable to allocate enemy storage.\n");
     exit(EXIT_FAILURE);
   }
-  enemy_manager->capacity = constants->max_enemies;
+  enemy_manager->capacity = constants->initial_max_enemies;
 
-  projectile_manager->projectiles = calloc(constants->max_projectiles, sizeof *(projectile_manager->projectiles));
+  projectile_manager->projectiles =
+      calloc(constants->initial_max_projectiles, sizeof *(projectile_manager->projectiles));
   if (!projectile_manager->projectiles) {
     fprintf(stderr, "Unable to allocate projectile storage.\n");
     exit(EXIT_FAILURE);
   }
-  projectile_manager->capacity = constants->max_projectiles;
+  projectile_manager->capacity = constants->initial_max_projectiles;
 }
 
 // Perform initialisation steps for game start
@@ -394,7 +402,8 @@ void player_update_position(Player *player, const Constants *constants) {
 }
 
 // Generate a new projectile that moves towards the mouse
-Projectile projectile_generate(const Player *player, Vector2 camera_position, const Constants *constants) {
+Projectile projectile_generate_from_player(const Player *player, Vector2 camera_position,
+                                           const Constants *constants) {
   Projectile projectile = {.pos = player->pos,
                            .is_active = true,
                            .speed = player->projectile_speed,
@@ -405,9 +414,11 @@ Projectile projectile_generate(const Player *player, Vector2 camera_position, co
 
   // If the mouse is on the player, just fire in an arbitrary direction, otherwise fire towards the mouse
   if (Vector2Equals(mouse_pos, player->pos))
-    projectile.dir = (Vector2){1, 0};  // Arbitrarily choose to shoot to the right (normalised manually)
+    projectile.dir = (Vector2){1, 0};  // Arbitrarily choose to shoot to the right
   else
-    projectile.dir = Vector2Normalize(Vector2Subtract(mouse_pos, player->pos));
+    projectile.dir = Vector2Subtract(mouse_pos, player->pos);
+
+  projectile.dir = Vector2Normalize(projectile.dir);
 
   return projectile;
 }
@@ -415,10 +426,6 @@ Projectile projectile_generate(const Player *player, Vector2 camera_position, co
 // Spawn a new projectile when it is time to do so and if the correct button is down
 void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager, Vector2 camera_position,
                                     const Constants *constants) {
-  // The projectile manager should have capacity large enough that it never becomes full
-  assert((projectile_manager->projectile_count < projectile_manager->capacity) &&
-         "Trying to add projectile to full projectile manager");
-
   // If the mouse button isn't held, do nothing
   if (!IsMouseButtonDown(MOUSE_LEFT_BUTTON)) return;
 
@@ -426,9 +433,16 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
   float time_since_last_projectile = GetTime() - player->time_of_last_projectile;
   if (time_since_last_projectile < 1 / player->firerate) return;
 
+  // If the projectile manager would become full, double its size
+  while (projectile_manager->projectile_count + 1 > projectile_manager->capacity) {
+    projectile_manager->capacity *= 2;
+    projectile_manager->projectiles = realloc(
+        projectile_manager->projectiles, projectile_manager->capacity * sizeof *(projectile_manager->projectiles));
+  }
+
   for (int i = 0; i < projectile_manager->capacity; i++) {
     if (!projectile_manager->projectiles[i].is_active) {
-      projectile_manager->projectiles[i] = projectile_generate(player, camera_position, constants);
+      projectile_manager->projectiles[i] = projectile_generate_from_player(player, camera_position, constants);
       projectile_manager->projectile_count++;
       break;
     }
@@ -542,7 +556,7 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
       } while (wave_cost + enemy_types[0].credit_cost <= available_credits &&
                get_random_float(0, 1) <= constants->enemy_spawn_additional_enemy_chance);
 
-      // Check that adding a type 0 enemy was in fact the cheapest action
+      // Ensure that adding a type 0 enemy was in fact the cheapest action
       assert((wave_cost <= available_credits) && "Enemies added to wave exceeded credits");
 
       // Increase wave array size and ensure the new enemies are of type 0
@@ -555,6 +569,13 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
     }
     // Further iterations randomly choose to either upgrade the current enemies or add more
     upgrade_instead_of_add = GetRandomValue(0, 1);
+  }
+
+  // If the enemy manager would become full, double its capacity
+  while (enemy_manager->enemy_count + wave_size > enemy_manager->capacity) {
+    enemy_manager->capacity *= 2;
+    enemy_manager->enemies =
+        realloc(enemy_manager->enemies, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
   }
 
   // Actually generate the chosen enemies
@@ -658,7 +679,7 @@ void projectile_manager_update_projectile_positions(ProjectileManager *projectil
                                       Vector2Scale(this_projectile->dir, this_projectile->speed * GetFrameTime()));
 
     // If the projectile has moved outside the game boundaries, make it inactive
-    if (!circle_is_on_screen(this_projectile->pos, this_projectile->size, camera_position, constants)) {
+    if (!circle_is_in_game_area(this_projectile->pos, this_projectile->size, constants)) {
       this_projectile->is_active = false;
       projectile_manager->projectile_count--;
     }
@@ -708,6 +729,7 @@ void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *pro
 /* Camera calculations */
 /*---------------------------------------------------------------------------------------------------------------*/
 
+// Update the position of the camera (following the player without showing out of bounds area)
 void camera_update_position(Vector2 *camera_position, const Player *player, const Constants *constants) {
   Vector2 minimum_position =
       Vector2Scale(Vector2Subtract(constants->screen_dimensions, constants->game_area_dimensions), 0.5);
@@ -794,6 +816,7 @@ void draw_projectiles(const ProjectileManager *projectile_manager, Vector2 camer
   }
 }
 
+// Draw the squares in the background of the game (to give impression of movement while camera is stationary)
 void draw_background_squares(Vector2 camera_position, const Constants *constants) {
   // Quotient and remainder are taken with respect to division by a square length
   Vector2 camera_quotient = {floor(camera_position.x / constants->background_square_size),
@@ -1015,7 +1038,7 @@ int main() {
 
                          .upgrade_cost_multiplier = 1.5,
 
-                         .max_enemies = 100,
+                         .initial_max_enemies = 100,
                          .num_enemy_types = 3,
                          .enemy_spawn_interval_min = 3.5,
                          .enemy_spawn_interval_max = 4.5,
@@ -1029,7 +1052,7 @@ int main() {
                          .enemy_update_interval = 0.2,
                          .enemy_update_chance = 0.02,
 
-                         .max_projectiles = 40,
+                         .initial_max_projectiles = 40,
 
                          .font_spacing = 2,
                          .background_square_size = 2,
@@ -1058,15 +1081,6 @@ int main() {
                                     .colour = LIME,
                                     .turns_into = enemy_types + 1}};
   /*-------------------------------------------------------------------------------------------------------------*/
-
-  InitWindow(constants.initial_window_resolution.x, constants.initial_window_resolution.y, "Loop Shooter");
-  SetTargetFPS(constants.target_fps);
-
-  if (DEBUG == 1) {
-    printf("\n----- Game started with DEBUG = %d -----\n", DEBUG);
-  }
-
-  constants.game_font = GetFontDefault();  // Needs to come after window initialisation
 
   /*-------------------*/
   /* UI initialisation */
@@ -1112,6 +1126,16 @@ int main() {
   button_end_screen_back.bounds.y += 2.5;
   button_end_screen_back.text = "GO BACK";
   /*-------------------------------------------------------------------------------------------------------------*/
+
+  SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+  InitWindow(constants.initial_window_resolution.x, constants.initial_window_resolution.y, "Loop Shooter");
+  SetTargetFPS(constants.target_fps);
+
+  if (DEBUG == 1) {
+    printf("\n----- Game started with DEBUG = %d -----\n", DEBUG);
+  }
+
+  constants.game_font = GetFontDefault();  // Needs to come after window initialisation
 
   /*----------------------------*/
   /* Game object initialisation */
