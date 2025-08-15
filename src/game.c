@@ -30,7 +30,42 @@ typedef enum AnchorPosition {
 /*---------*/
 /* Structs */
 /*---------------------------------------------------------------------------------------------------------------*/
+typedef struct GameColours {
+  Color red_1;
+  Color red_2;
+  Color red_3;
+
+  Color blue_1;
+  Color blue_2;
+  Color blue_3;
+  Color blue_4;
+
+  Color green_1;
+  Color green_2;
+  Color green_3;
+
+  Color yellow_1;
+  Color yellow_2;
+  Color yellow_3;
+
+  Color pink_1;
+  Color pink_2;
+
+  Color brown_1;
+  Color brown_2;
+
+  Color white;
+  Color grey_1;
+  Color grey_2;
+  Color grey_3;
+  Color grey_4;
+  Color grey_5;
+  Color grey_6;
+  Color black;
+} GameColours;
+
 typedef struct Constants {
+  GameColours *game_colours;          // Pointer to location of the game's colour palette
   Vector2 initial_window_resolution;  // Initial game window dimensions in pixels
   float aspect_ratio;                 // Aspect ratio to keep the game at (we draw black bars to maintain this)
   Vector2 screen_dimensions;          // Dimensions of the displayed portion of the play space in units
@@ -862,12 +897,14 @@ void draw_black_bars(const Constants *constants) {
 
   if (aspect_ratio > constants->aspect_ratio) {  // If the window is too wide
     float black_bar_width = 0.5 * (screen_width - constants->aspect_ratio * screen_height);
-    DrawRectangle(0, 0, black_bar_width, screen_height, BLACK);
-    DrawRectangle(screen_width - black_bar_width, 0, black_bar_width, screen_height, BLACK);
+    DrawRectangle(0, 0, black_bar_width, screen_height, constants->game_colours->black);
+    DrawRectangle(screen_width - black_bar_width, 0, black_bar_width, screen_height,
+                  constants->game_colours->black);
   } else {  // If the window is too tall
     float black_bar_height = 0.5 * (screen_height - (1 / constants->aspect_ratio) * screen_width);
-    DrawRectangle(0, 0, screen_width, black_bar_height, BLACK);
-    DrawRectangle(0, screen_height - black_bar_height, screen_width, black_bar_height, BLACK);
+    DrawRectangle(0, 0, screen_width, black_bar_height, constants->game_colours->black);
+    DrawRectangle(0, screen_height - black_bar_height, screen_width, black_bar_height,
+                  constants->game_colours->black);
   }
 }
 // Same as DrawTextEx but with the text anchored
@@ -935,58 +972,63 @@ void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_ma
                               const ProjectileManager *projectile_manager, const Constants *constants,
                               bool show_debug_text) {
   draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0.25, 0.25}, 0.4,
-                     constants->font_spacing, BLACK, ANCHOR_TOP_LEFT, constants);
+                     constants->font_spacing, constants->game_colours->black, ANCHOR_TOP_LEFT, constants);
 
   if (show_debug_text) {
     draw_text_anchored(constants->game_font,
                        TextFormat("Enemy count: %2d/%d", enemy_manager->enemy_count, enemy_manager->capacity),
-                       (Vector2){0.25, 0.75}, 0.25, constants->font_spacing, DARKGRAY, ANCHOR_TOP_LEFT, constants);
+                       (Vector2){0.25, 0.75}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
+                       ANCHOR_TOP_LEFT, constants);
 
     draw_text_anchored(
         constants->game_font,
         TextFormat("Projectile count: %2d/%d", projectile_manager->projectile_count, projectile_manager->capacity),
-        (Vector2){0.25, 1}, 0.25, constants->font_spacing, DARKGRAY, ANCHOR_TOP_LEFT, constants);
+        (Vector2){0.25, 1}, 0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT,
+        constants);
 
     float num_credits = enemy_manager_calculate_credits(enemy_manager, constants);
     draw_text_anchored(constants->game_font, TextFormat("Credits: %5.2f", num_credits), (Vector2){0.25, 1.25},
-                       0.25, constants->font_spacing, DARKGRAY, ANCHOR_TOP_LEFT, constants);
+                       0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT, constants);
 
     draw_text_anchored(constants->game_font, TextFormat("%d", GetFPS()), (Vector2){-0.25, 0.25}, 0.35,
-                       constants->font_spacing, GREEN, ANCHOR_TOP_RIGHT, constants);
+                       constants->font_spacing, constants->game_colours->green_2, ANCHOR_TOP_RIGHT, constants);
   }
 }
 
 // Draw the text for the shop page
 void draw_shop_text(const Shop *shop, const Player *player, const Constants *constants) {
   draw_text_anchored(constants->game_font, TextFormat("$%d", shop->money), (Vector2){-0.5, 0.5}, 0.4,
-                     constants->font_spacing, GOLD, ANCHOR_TOP_RIGHT, constants);
+                     constants->font_spacing, constants->game_colours->yellow_3, ANCHOR_TOP_RIGHT, constants);
 
   Upgrade upgrade_firerate = shop->upgrades[0];
-  draw_text_anchored(constants->game_font, "Firerate", (Vector2){1.25, 0.5}, 0.4, constants->font_spacing, BLACK,
-                     ANCHOR_TOP_LEFT, constants);
+  draw_text_anchored(constants->game_font, "Firerate", (Vector2){1.25, 0.5}, 0.4, constants->font_spacing,
+                     constants->game_colours->grey_6, ANCHOR_TOP_LEFT, constants);
   draw_text_anchored(
       constants->game_font,
       TextFormat("%.1f -> %.1f", player->firerate,
                  player->firerate + upgrade_firerate.stat_increment * constants->player_base_firerate),
-      (Vector2){1.25, 0.9}, 0.3, constants->font_spacing, DARKBROWN, ANCHOR_TOP_LEFT, constants);
+      (Vector2){1.25, 0.9}, 0.3, constants->font_spacing, constants->game_colours->grey_4, ANCHOR_TOP_LEFT,
+      constants);
 
   Upgrade upgrade_projectile_speed = shop->upgrades[1];
   draw_text_anchored(constants->game_font, "Projectile speed", (Vector2){1.25, 1.5}, 0.4, constants->font_spacing,
-                     BLACK, ANCHOR_TOP_LEFT, constants);
+                     constants->game_colours->grey_6, ANCHOR_TOP_LEFT, constants);
   draw_text_anchored(constants->game_font,
                      TextFormat("%.1f -> %.1f", player->projectile_speed,
                                 player->projectile_speed + upgrade_projectile_speed.stat_increment *
                                                                constants->player_base_projectile_speed),
-                     (Vector2){1.25, 1.9}, 0.3, constants->font_spacing, DARKBROWN, ANCHOR_TOP_LEFT, constants);
+                     (Vector2){1.25, 1.9}, 0.3, constants->font_spacing, constants->game_colours->grey_4,
+                     ANCHOR_TOP_LEFT, constants);
 
   Upgrade upgrade_projectile_size = shop->upgrades[2];
   draw_text_anchored(constants->game_font, "Projectile size", (Vector2){1.25, 2.5}, 0.4, constants->font_spacing,
-                     BLACK, ANCHOR_TOP_LEFT, constants);
+                     constants->game_colours->grey_6, ANCHOR_TOP_LEFT, constants);
   draw_text_anchored(constants->game_font,
                      TextFormat("%.2f -> %.2f", player->projectile_size,
                                 player->projectile_size + upgrade_projectile_size.stat_increment *
                                                               constants->player_base_projectile_size),
-                     (Vector2){1.25, 2.9}, 0.3, constants->font_spacing, DARKBROWN, ANCHOR_TOP_LEFT, constants);
+                     (Vector2){1.25, 2.9}, 0.3, constants->font_spacing, constants->game_colours->grey_4,
+                     ANCHOR_TOP_LEFT, constants);
 }
 
 // Update text for and draw purchase buttons in the shop screen
@@ -1011,10 +1053,10 @@ void draw_shop_purchase_buttons(Button *buttons_shop_purchase, const Shop *shop,
 
 // Draw the text in the game over screen
 void draw_game_over_text(const Player *player, const Constants *constants) {
-  draw_text_anchored(constants->game_font, "GAME OVER", (Vector2){0, -3}, 0.8, constants->font_spacing, MAROON,
-                     ANCHOR_CENTRE, constants);
+  draw_text_anchored(constants->game_font, "GAME OVER", (Vector2){0, -3}, 0.8, constants->font_spacing,
+                     constants->game_colours->red_2, ANCHOR_CENTRE, constants);
   draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0, -2}, 0.5,
-                     constants->font_spacing, BLACK, ANCHOR_CENTRE, constants);
+                     constants->font_spacing, constants->game_colours->black, ANCHOR_CENTRE, constants);
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
@@ -1022,7 +1064,39 @@ int main() {
   /*--------------------------*/
   /* Constants initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
-  Constants constants = {.initial_window_resolution = {1280, 720},
+  GameColours game_colours = {.red_1 = GetColor(0xEF3939FF),
+                              .red_2 = GetColor(0xCB1A1AFF),
+                              .red_3 = GetColor(0x841616FF),
+
+                              .blue_1 = GetColor(0x7BE0F7FF),
+                              .blue_2 = GetColor(0x42A2E3FF),
+                              .blue_3 = GetColor(0x344CC6FF),
+                              .blue_4 = GetColor(0x2C257FFF),
+
+                              .green_1 = GetColor(0xC9D844FF),
+                              .green_2 = GetColor(0x89B431FF),
+                              .green_3 = GetColor(0x38801DFF),
+                              .yellow_1 = GetColor(0xFFD92FFF),
+                              .yellow_2 = GetColor(0xDFB51CFF),
+                              .yellow_3 = GetColor(0xC48C13FF),
+
+                              .pink_1 = GetColor(0xF89EA9FF),
+                              .pink_2 = GetColor(0xF26273FF),
+
+                              .brown_1 = GetColor(0x7F4511FF),
+                              .brown_2 = GetColor(0x5C3208FF),
+
+                              .white = GetColor(0xF6F9FFFF),
+                              .grey_1 = GetColor(0xDDE1E9FF),
+                              .grey_2 = GetColor(0xBAC1CEFF),
+                              .grey_3 = GetColor(0x90959DFF),
+                              .grey_4 = GetColor(0x66696EFF),
+                              .grey_5 = GetColor(0x45474AFF),
+                              .grey_6 = GetColor(0x313133FF),
+                              .black = GetColor(0x1A1B1BFF)};
+
+  Constants constants = {.game_colours = &game_colours,
+                         .initial_window_resolution = {1280, 720},
                          .aspect_ratio = 16.0 / 9.0,
                          .screen_dimensions = {16, 9},
                          .game_area_dimensions = {64, 64},
@@ -1031,17 +1105,17 @@ int main() {
                          .player_start_pos = {0},
                          .player_base_speed = 7,
                          .player_base_size = 0.33,
-                         .player_colour = VIOLET,
+                         .player_colour = game_colours.brown_1,
 
                          .player_base_firerate = 2,
                          .player_base_projectile_speed = 8,
                          .player_base_projectile_size = 0.12,
-                         .player_projectile_colour = DARKGRAY,
+                         .player_projectile_colour = game_colours.grey_5,
 
                          .upgrade_cost_multiplier = 1.5,
 
                          .initial_max_enemies = 100,
-                         .num_enemy_types = 3,
+                         .num_enemy_types = 5,
                          .enemy_spawn_interval_min = 3.5,
                          .enemy_spawn_interval_max = 4.5,
                          .enemy_first_spawn_interval = 1.0,
@@ -1058,30 +1132,44 @@ int main() {
 
                          .font_spacing = 2,
                          .background_square_size = 2,
-                         .background_colour = WHITE,
-                         .background_square_colour = RAYWHITE};
+                         .background_colour = game_colours.white,
+                         .background_square_colour = game_colours.grey_1};
 
   const EnemyType enemy_types[] = {{.credit_cost = 1,
                                     .min_speed = 2.5,
                                     .max_speed = 3,
                                     .min_size = 0.27,
                                     .max_size = 0.29,
-                                    .colour = RED,
+                                    .colour = game_colours.red_1,
                                     .turns_into = NULL},
                                    {.credit_cost = 3,
                                     .min_speed = 3,
                                     .max_speed = 3.5,
                                     .min_size = 0.28,
                                     .max_size = 0.31,
-                                    .colour = SKYBLUE,
+                                    .colour = game_colours.blue_2,
                                     .turns_into = enemy_types + 0},
                                    {.credit_cost = 7,
                                     .min_speed = 3.5,
                                     .max_speed = 4,
                                     .min_size = 0.30,
                                     .max_size = 0.34,
-                                    .colour = LIME,
-                                    .turns_into = enemy_types + 1}};
+                                    .colour = game_colours.green_2,
+                                    .turns_into = enemy_types + 1},
+                                   {.credit_cost = 12,
+                                    .min_speed = 4,
+                                    .max_speed = 4.5,
+                                    .min_size = 0.35,
+                                    .max_size = 0.4,
+                                    .colour = game_colours.yellow_2,
+                                    .turns_into = enemy_types + 2},
+                                   {.credit_cost = 19,
+                                    .min_speed = 4.5,
+                                    .max_speed = 5.5,
+                                    .min_size = 0.37,
+                                    .max_size = 0.44,
+                                    .colour = game_colours.pink_2,
+                                    .turns_into = enemy_types + 3}};
   /*-------------------------------------------------------------------------------------------------------------*/
 
   /*-------------------*/
@@ -1090,34 +1178,37 @@ int main() {
   Button button_start_screen_start = {.bounds = {0, -1, 3, 1.2},
                                       .anchor_type = ANCHOR_CENTRE,
                                       .text = "START",
-                                      .body_colour_default = YELLOW,
-                                      .body_colour_hover = GOLD,
-                                      .body_colour_pressed = ORANGE,
-                                      .text_colour = BLACK,
+                                      .body_colour_default = game_colours.green_1,
+                                      .body_colour_hover = game_colours.green_2,
+                                      .body_colour_pressed = game_colours.green_3,
+                                      .text_colour = game_colours.black,
                                       .font_size = 0.6};
 
   // It is convenient for me to create some buttons by simply copying a previous button and changing some values
   Button button_start_screen_shop = button_start_screen_start;
   button_start_screen_shop.bounds.y += 2.5;
   button_start_screen_shop.text = "SHOP";
+  button_start_screen_shop.body_colour_default = game_colours.yellow_1;
+  button_start_screen_shop.body_colour_hover = game_colours.yellow_2;
+  button_start_screen_shop.body_colour_pressed = game_colours.yellow_3;
 
   Button button_shop_screen_back = {.bounds = {0.25, -0.25, 1.2, 0.5},
                                     .anchor_type = ANCHOR_BOTTOM_LEFT,
                                     .text = "BACK",
-                                    .body_colour_default = YELLOW,
-                                    .body_colour_hover = GOLD,
-                                    .body_colour_pressed = ORANGE,
-                                    .text_colour = BLACK,
+                                    .body_colour_default = game_colours.red_1,
+                                    .body_colour_hover = game_colours.red_2,
+                                    .body_colour_pressed = game_colours.red_3,
+                                    .text_colour = game_colours.black,
                                     .font_size = 0.28};
 
   // The first purchase button is created manually, and the others are identical but shifted down
   Button buttons_shop_purchase[NUM_UPGRADES] = {{.bounds = {0.18, 0.58, 0.94, 0.5},
                                                  .anchor_type = ANCHOR_TOP_LEFT,
                                                  .text = "price",
-                                                 .body_colour_default = GREEN,
-                                                 .body_colour_hover = LIME,
-                                                 .body_colour_pressed = DARKGREEN,
-                                                 .text_colour = BLACK,
+                                                 .body_colour_default = game_colours.green_1,
+                                                 .body_colour_hover = game_colours.green_2,
+                                                 .body_colour_pressed = game_colours.green_3,
+                                                 .text_colour = game_colours.black,
                                                  .font_size = 0.25}};
   buttons_shop_purchase[1] = buttons_shop_purchase[0];
   buttons_shop_purchase[1].bounds.y += 1;
