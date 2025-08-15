@@ -611,6 +611,8 @@ void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, const P
   float time_since_last_update = GetTime() - enemy_manager->time_of_last_update;
   if (time_since_last_update < constants->enemy_update_interval) return;
 
+  enemy_manager->time_of_last_update = GetTime();
+
   // Otherwise, iterate through the enemies and (sometimes) update their desired positions
   for (int i = 0; i < enemy_manager->capacity; i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
@@ -1049,8 +1051,8 @@ int main() {
                          .enemy_credit_multiplier = 0.3,
                          .enemy_credit_exponent = 1.7,
 
-                         .enemy_update_interval = 0.2,
-                         .enemy_update_chance = 0.02,
+                         .enemy_update_interval = 0.1,
+                         .enemy_update_chance = 0.4,
 
                          .initial_max_projectiles = 40,
 
