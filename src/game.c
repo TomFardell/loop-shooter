@@ -111,18 +111,21 @@ typedef struct Constants {
 typedef struct Player {
   Vector2 pos;  // Current position of the player
 
-  float speed;   // Speed of the player's movement
-  float size;    // Radius of the player circle
-  Color colour;  // Colour of the player
-  int score;     // Score of the player in this game loop
+  float speed;       // Speed of the player's movement
+  float size;        // Radius of the player circle
+  Color colour;      // Colour of the player
+  int score;         // Score of the player in this game loop
+  int boss_credits;  // Boss credits aquired by the player this game loop
+  bool is_defeated;  // Whether the player is defeated and the game should end
 
   float firerate;                 // Firerate of the player's shots (shots per second)
   float projectile_speed;         // Speed at which the player's projectiles travel
   float projectile_size;          // Radius of the player's projectile circles
   Color projectile_colour;        // Colour of the player's projectiles
-  float time_of_last_projectile;  // Number of seconds since the last projectile was fired
+  float time_of_last_projectile;  // Time at which the most recent projectile was fired
 } Player;
 
+// TODO: Add boss credit upgrades
 typedef struct Upgrade {
   float cost;            // Cost of the next upgrade purchase
   float stat_increment;  // Increment of the stat being upgraded (as fraction of the base value)
@@ -133,6 +136,7 @@ typedef struct Upgrade {
 #define NUM_UPGRADES 3
 typedef struct Shop {
   int money;                       // Amount of money the player has
+  int boss_credits;                // Amount of boss credits the player has
   Upgrade upgrades[NUM_UPGRADES];  // Array of upgrades available in the shop
 } Shop;
 
@@ -154,8 +158,46 @@ typedef struct Enemy {
   float speed;  // Speed at which the enemy moves (towards its desired position)
   float size;   // Radius of the enemy circle
 
-  const EnemyType *type;  // Enemy type of this enemy
+  const EnemyType *type;  // Pointer to the type of the enemy
 } Enemy;
+
+typedef struct BossType {
+  int initial_score_to_spawn;  // Spawn the boss when this score is reached
+  float max_health;            // Maximum health of the boss
+  float speed;                 // Speed of the boss
+  float size;                  // Size (radius) of the boss
+  Color colour;                // Colour of the boss
+
+  float firerate;           // Firerate of the boss's shots (shots per second)
+  int shots_per_burst;      // Number of shots in each burst the boss fires
+  float projectile_speed;   // Speed at which the boss's projectiles travel
+  float projectile_size;    // Radius of the boss's projectile circles
+  Color projectile_colour;  // Colour of the boss's projectiles
+
+  float moving_duration;      // Duration of the moving part of the boss's movement cycle (in seconds)
+  float stationary_duration;  // Duration of the stationary part of the boss's movement cycle (in seconds)
+
+  int num_enemies_spawned_on_defeat;  // Number of enemies spawned when the boss is defeated
+  int boss_credits_on_defeat;         // Number of boss credits awarded to the player when the boss is defeated
+  int score_on_defeat;                // Number of points awarded to the player when the boss is defeated
+} BossType;
+
+typedef enum BossState { MOVING, STATIONARY } BossState;
+typedef struct Boss {
+  Vector2 pos;               // Current position of the boss
+  Vector2 desired_pos;       // Position that the boss will move towards
+  BossState state;           // Current state of the boss
+  bool is_active;            // Whether the boss is currently active in the game
+  bool is_defeated;          // Whether the boss has been defeated and death actions need to take place
+  int score_for_next_spawn;  // Player score required to next spawn the boss
+
+  float health;                     // Current health of the boss
+  int shots_left_in_burst;          // Remaining shots in the current burst of shots fired by the boss
+  float time_of_last_projectile;    // Time at which the most recent projectile was fired
+  float time_of_last_state_switch;  // Time at which the boss last switched between moving and being stationary
+
+  const BossType *boss_type;  // Pointer to the boss type of the boss
+} Boss;
 
 typedef struct EnemyManager {
   Enemy *enemies;   // Pointer to array of enemies
@@ -170,10 +212,12 @@ typedef struct EnemyManager {
   float time_of_last_update;  // Time of the last update of enemy positions
 } EnemyManager;
 
+typedef enum ProjectileAllegiance { PLAYER, ENEMIES } ProjectileAllegiance;
 typedef struct Projectile {
-  Vector2 pos;     // Current position of the projectile
-  Vector2 dir;     // Movement direction of the projectile. Should always be normalised
-  bool is_active;  // Whether the projectile is processed and drawn
+  Vector2 pos;                      // Current position of the projectile
+  Vector2 dir;                      // Movement direction of the projectile. Should always be normalised
+  bool is_active;                   // Whether the projectile is processed and drawn
+  ProjectileAllegiance allegiance;  // Allegiance of the projectile (so it doesn't damage allies)
 
   float speed;   // Speed at which the projectile moves (in its movement direction)
   float size;    // Radius of the projectile circle
@@ -385,11 +429,13 @@ void initialise_game(Player *player, EnemyManager *enemy_manager, ProjectileMana
 }
 
 // Perform initialisation steps for game start
-void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager,
+void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager, Boss *boss,
                 const Constants *constants) {
   float start_time = GetTime();
   player->pos = constants->player_start_pos;
   player->score = 0;
+  player->boss_credits = 0;
+  player->is_defeated = false;
   player->time_of_last_projectile = start_time;
 
   memset(enemy_manager->enemies, 0, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
@@ -403,11 +449,17 @@ void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *
   memset(projectile_manager->projectiles, 0,
          projectile_manager->capacity * sizeof *(projectile_manager->projectiles));
   projectile_manager->projectile_count = 0;
+
+  // Most stats are set when boss is spawned
+  boss->is_active = false;
+  boss->is_defeated = false;
+  boss->score_for_next_spawn = boss->boss_type->initial_score_to_spawn;
 }
 
 // Perform actions when this instance of the game ends
 void end_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager, Shop *shop) {
   shop->money += player->score;
+  shop->boss_credits += player->boss_credits;
 }
 
 // Clean up game objects when the program ends
@@ -417,6 +469,119 @@ void cleanup_game(EnemyManager *enemy_manager, ProjectileManager *projectile_man
 
   free(projectile_manager->projectiles);
   projectile_manager->projectiles = NULL;
+}
+/*---------------------------------------------------------------------------------------------------------------*/
+
+/*-----------------------*/
+/* Projectile management */
+/*---------------------------------------------------------------------------------------------------------------*/
+
+// Add a projectile to the projectile manager's storage, doubling its size if it is full
+void projectile_manager_add_projectile(ProjectileManager *projectile_manager, Projectile projectile) {
+  // If the projectile manager would become full, double its size
+  while (projectile_manager->projectile_count + 1 > projectile_manager->capacity) {
+    projectile_manager->capacity *= 2;
+    projectile_manager->projectiles = realloc(
+        projectile_manager->projectiles, projectile_manager->capacity * sizeof *(projectile_manager->projectiles));
+  }
+
+  for (int i = 0; i < projectile_manager->capacity; i++) {
+    if (!projectile_manager->projectiles[i].is_active) {
+      projectile_manager->projectiles[i] = projectile;
+      projectile_manager->projectile_count++;
+      return;
+    }
+
+    // Check that the loop doesn't terminate without finding an inactive projectile (this is the final i)
+    assert((i != projectile_manager->capacity - 1) && "No inactive projectile found");
+  }
+}
+
+// Update projectile positions according to their trajectories
+void projectile_manager_update_projectile_positions(ProjectileManager *projectile_manager, Vector2 camera_position,
+                                                    const Constants *constants) {
+  for (int i = 0, projectiles_counted = 0;
+       i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
+    Projectile *this_projectile = projectile_manager->projectiles + i;
+    if (!this_projectile->is_active) continue;
+
+    projectiles_counted++;
+
+    // Move the projectile along its trajectory according to its speed
+    this_projectile->pos = Vector2Add(this_projectile->pos,
+                                      Vector2Scale(this_projectile->dir, this_projectile->speed * GetFrameTime()));
+
+    // If the projectile has moved outside the game boundaries, make it inactive
+    if (!circle_is_in_game_area(this_projectile->pos, this_projectile->size, constants)) {
+      this_projectile->is_active = false;
+      projectile_manager->projectile_count--;
+    }
+  }
+}
+
+// Check for collisions between projectiles and objects of opposing allegiance
+void projectile_manager_check_for_collisions(ProjectileManager *projectile_manager, EnemyManager *enemy_manager,
+                                             Player *player, Boss *boss) {
+  for (int i = 0, projectiles_counted = 0;
+       i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
+    Projectile *this_projectile = projectile_manager->projectiles + i;
+    if (!this_projectile->is_active) continue;
+
+    projectiles_counted++;
+
+    switch (this_projectile->allegiance) {
+      case PLAYER:
+        // Check for collisions with enemies
+        for (int j = 0, enemies_counted = 0;
+             j < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count; j++) {
+          Enemy *this_enemy = enemy_manager->enemies + j;
+          if (!this_enemy->is_active) continue;
+
+          enemies_counted++;
+
+          if (!CheckCollisionCircles(this_projectile->pos, this_projectile->size, this_enemy->pos,
+                                     this_enemy->size))
+            continue;
+
+          this_projectile->is_active = false;
+          projectile_manager->projectile_count--;
+
+          // If we are not at the base enemy type, decay into the next type in the chain
+          if (this_enemy->type->turns_into) {
+            this_enemy->type = this_enemy->type->turns_into;
+            this_enemy->speed = get_random_float(this_enemy->type->min_speed, this_enemy->type->max_speed);
+          } else {  // Otherwise destroy the enemy
+            this_enemy->is_active = false;
+            enemy_manager->enemy_count--;
+          }
+
+          player->score++;
+          break;  // Exit the enemy loop so the projectile doesn't destroy a second enemy
+        }
+
+        // Check for a collision with the boss
+        if (!boss->is_active) break;
+        if (!CheckCollisionCircles(this_projectile->pos, this_projectile->size, boss->pos, boss->boss_type->size))
+          break;
+
+        this_projectile->is_active = false;
+        projectile_manager->projectile_count--;
+
+        boss->health--;
+        if (boss->health <= 0) {
+          boss->is_defeated = true;
+        }
+
+        break;
+      case ENEMIES:
+        if (!CheckCollisionCircles(this_projectile->pos, this_projectile->size, player->pos, player->size)) break;
+
+        player->is_defeated = true;
+
+        this_projectile->is_active = false;
+        projectile_manager->projectile_count--;
+    }
+  }
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
@@ -441,6 +606,7 @@ Projectile projectile_generate_from_player(const Player *player, Vector2 camera_
                                            const Constants *constants) {
   Projectile projectile = {.pos = player->pos,
                            .is_active = true,
+                           .allegiance = PLAYER,
                            .speed = player->projectile_speed,
                            .size = player->projectile_size,
                            .colour = player->projectile_colour};
@@ -459,8 +625,8 @@ Projectile projectile_generate_from_player(const Player *player, Vector2 camera_
 }
 
 // Spawn a new projectile when it is time to do so and if the correct button is down
-void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectile_manager, Vector2 camera_position,
-                                    const Constants *constants) {
+void player_try_to_fire_projectile(Player *player, ProjectileManager *projectile_manager, Vector2 camera_position,
+                                   const Constants *constants) {
   // If the mouse button isn't held, do nothing
   if (!IsMouseButtonDown(MOUSE_LEFT_BUTTON)) return;
 
@@ -468,23 +634,8 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
   float time_since_last_projectile = GetTime() - player->time_of_last_projectile;
   if (time_since_last_projectile < 1 / player->firerate) return;
 
-  // If the projectile manager would become full, double its size
-  while (projectile_manager->projectile_count + 1 > projectile_manager->capacity) {
-    projectile_manager->capacity *= 2;
-    projectile_manager->projectiles = realloc(
-        projectile_manager->projectiles, projectile_manager->capacity * sizeof *(projectile_manager->projectiles));
-  }
-
-  for (int i = 0; i < projectile_manager->capacity; i++) {
-    if (!projectile_manager->projectiles[i].is_active) {
-      projectile_manager->projectiles[i] = projectile_generate_from_player(player, camera_position, constants);
-      projectile_manager->projectile_count++;
-      break;
-    }
-
-    // Check that the loop doesn't terminate without finding an inactive projectile (this is the final i)
-    assert((i != projectile_manager->capacity - 1) && "No inactive projectile found");
-  }
+  Projectile projectile = projectile_generate_from_player(player, camera_position, constants);
+  projectile_manager_add_projectile(projectile_manager, projectile);
 
   player->time_of_last_projectile = GetTime();
 }
@@ -493,6 +644,28 @@ void player_try_to_spawn_projectile(Player *player, ProjectileManager *projectil
 /*------------------*/
 /* Enemy management */
 /*---------------------------------------------------------------------------------------------------------------*/
+
+// Add an enemy to the enemy manager's storage, doubling its size if necessary
+void enemy_manager_add_enemy(EnemyManager *enemy_manager, Enemy enemy) {
+  // If the enemy manager would become full, double its capacity
+  while (enemy_manager->enemy_count + 1 > enemy_manager->capacity) {
+    enemy_manager->capacity *= 2;
+    enemy_manager->enemies =
+        realloc(enemy_manager->enemies, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
+  }
+
+  // Loop through the enemy slots until an inactive enemy is found and replace with an enemy of the desired type
+  for (int j = 0; j < enemy_manager->capacity; j++) {
+    if (!enemy_manager->enemies[j].is_active) {
+      enemy_manager->enemies[j] = enemy;
+      enemy_manager->enemy_count++;
+      break;
+    }
+
+    // Check that the loop doesn't terminate without finding an inactive enemy (this is the final j)
+    assert((j != enemy_manager->capacity - 1) && "No inactive enemy found");
+  }
+}
 
 // Enemy manager credits, at time t and before spending, are given by: credits = mult * t ^ exp,
 // where mult and exp are constants defined at game initialisation
@@ -503,7 +676,8 @@ float enemy_manager_calculate_credits(const EnemyManager *enemy_manager, const C
 }
 
 // Randomly generate a starting position of an enemy. Enemies spawn in the game area but off the screen
-Vector2 enemy_get_random_start_pos(float enemy_size, Vector2 camera_position, const Constants *constants) {
+Vector2 get_random_enemy_start_position(float enemy_size, Vector2 camera_position, const Constants *constants) {
+  // Using a for loop here is fine as it is unlikely to run more than a couple of times
   for (;;) {
     Vector2 position = {
         get_random_float(-constants->game_area_dimensions.x / 2, constants->game_area_dimensions.x / 2),
@@ -522,7 +696,7 @@ Enemy enemy_generate(const EnemyType *enemy_type, const Player *player, Vector2 
                  .size = get_random_float(enemy_type->min_size, enemy_type->max_size),
                  .type = enemy_type};
 
-  enemy.pos = enemy_get_random_start_pos(enemy.size, camera_position, constants);
+  enemy.pos = get_random_enemy_start_position(enemy.size, camera_position, constants);
 
   return enemy;
 }
@@ -606,27 +780,10 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
     upgrade_instead_of_add = GetRandomValue(0, 1);
   }
 
-  // If the enemy manager would become full, double its capacity
-  while (enemy_manager->enemy_count + wave_size > enemy_manager->capacity) {
-    enemy_manager->capacity *= 2;
-    enemy_manager->enemies =
-        realloc(enemy_manager->enemies, enemy_manager->capacity * sizeof *(enemy_manager->enemies));
-  }
-
-  // Actually generate the chosen enemies
+  // Add the enemies from the wave to the enemy manager
   for (int i = 0; i < wave_size; i++) {
-    // Loop through the enemy slots until an inactive enemy is found and replace with an enemy of the desired type
-    for (int j = 0; j < enemy_manager->capacity; j++) {
-      if (!enemy_manager->enemies[j].is_active) {
-        enemy_manager->enemies[j] =
-            enemy_generate(enemy_types + wave_enemy_types[i], player, camera_position, constants);
-        enemy_manager->enemy_count++;
-        break;
-      }
-
-      // Check that the loop doesn't terminate without finding an inactive enemy (this is the final j)
-      assert((j != enemy_manager->capacity - 1) && "No inactive enemy found");
-    }
+    Enemy this_enemy = enemy_generate(enemy_types + wave_enemy_types[i], player, camera_position, constants);
+    enemy_manager_add_enemy(enemy_manager, this_enemy);
   }
 
   enemy_manager->credits_spent += wave_cost;
@@ -660,8 +817,8 @@ void enemy_manager_update_desired_positions(EnemyManager *enemy_manager, const P
   }
 }
 
-// Update the positions of all active enemies according to their movements
-void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
+// Update the positions of active enemies and check for collisions with the player
+void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager, Player *player) {
   for (int i = 0, enemies_counted = 0; i < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count;
        i++) {
     Enemy *this_enemy = enemy_manager->enemies + i;
@@ -669,97 +826,107 @@ void enemy_manager_update_enemy_positions(EnemyManager *enemy_manager) {
 
     enemies_counted++;  // Keep track of enemies processed so we can exit the loop early
 
-    // Move the enemy towards its desired position according to its speedA
+    // Move the enemy towards its desired position according to its speed
     Vector2 normalised_move_direction =
         Vector2Normalize(Vector2Subtract(this_enemy->desired_pos, this_enemy->pos));
     this_enemy->pos =
         Vector2Add(this_enemy->pos, Vector2Scale(normalised_move_direction, this_enemy->speed * GetFrameTime()));
-  }
-}
 
-// Get whether an enemy is currently colliding with the player
-bool enemy_manager_enemy_is_colliding_with_player(EnemyManager *enemy_manager, const Player *player) {
-  for (int i = 0, enemies_counted = 0; i < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count;
-       i++) {
-    Enemy *this_enemy = enemy_manager->enemies + i;
-    if (!this_enemy->is_active) continue;
+    // Check for the enemy colliding with the player
+    if (CheckCollisionCircles(this_enemy->pos, this_enemy->size, player->pos, player->size)) {
+      // Delete the enemy (not strictly necessary at the moment)
+      this_enemy->is_active = false;
+      enemy_manager->enemy_count--;
 
-    enemies_counted++;
-
-    if (!CheckCollisionCircles(this_enemy->pos, this_enemy->size, player->pos, player->size)) continue;
-
-    this_enemy->is_active = false;
-    enemy_manager->enemy_count--;
-    return true;
-  }
-
-  return false;
-}
-/*---------------------------------------------------------------------------------------------------------------*/
-
-/*-----------------------*/
-/* Projectile management */
-/*---------------------------------------------------------------------------------------------------------------*/
-
-// Update projectile positions according to their trajectories
-void projectile_manager_update_projectile_positions(ProjectileManager *projectile_manager, Vector2 camera_position,
-                                                    const Constants *constants) {
-  for (int i = 0, projectiles_counted = 0;
-       i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
-    Projectile *this_projectile = projectile_manager->projectiles + i;
-    if (!this_projectile->is_active) continue;
-
-    projectiles_counted++;
-
-    // Move the projectile along its trajectory according to its speed
-    this_projectile->pos = Vector2Add(this_projectile->pos,
-                                      Vector2Scale(this_projectile->dir, this_projectile->speed * GetFrameTime()));
-
-    // If the projectile has moved outside the game boundaries, make it inactive
-    if (!circle_is_in_game_area(this_projectile->pos, this_projectile->size, constants)) {
-      this_projectile->is_active = false;
-      projectile_manager->projectile_count--;
+      player->is_defeated = true;
     }
   }
 }
 
-// Check whether any projectile is collided with an enemy, destroying both if this is the case
-void projectile_manager_check_for_collisions_with_enemies(ProjectileManager *projectile_manager,
-                                                          EnemyManager *enemy_manager, Player *player) {
-  for (int i = 0, projectiles_counted = 0;
-       i < projectile_manager->capacity && projectiles_counted < projectile_manager->projectile_count; i++) {
-    Projectile *this_projectile = projectile_manager->projectiles + i;
-    if (!this_projectile->is_active) continue;
+// If it is time to do so, spawn the boss
+void boss_try_to_spawn(Boss *boss, const Player *player, Vector2 camera_position, const Constants *constants) {
+  if (boss->is_active) return;
+  if (player->score < boss->score_for_next_spawn) return;
 
-    projectiles_counted++;
+  boss->pos = get_random_enemy_start_position(boss->boss_type->size, camera_position, constants);
+  boss->desired_pos = player->pos;
+  boss->is_active = true;
+  boss->health = boss->boss_type->max_health;
+  boss->time_of_last_projectile = GetTime();
+}
 
-    for (int j = 0, enemies_counted = 0;
-         j < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count; j++) {
-      Enemy *this_enemy = enemy_manager->enemies + j;
-      if (!this_enemy->is_active) continue;
+// If it is time to do so, change the boss between moving and being stationary
+void boss_try_to_switch_states(Boss *boss, const Player *player) {
+  if (!boss->is_active) return;
 
-      enemies_counted++;
+  if (boss->state == MOVING && GetTime() - boss->time_of_last_state_switch >= boss->boss_type->moving_duration) {
+    boss->state = STATIONARY;
+    boss->time_of_last_state_switch = GetTime();
+    boss->shots_left_in_burst = boss->boss_type->shots_per_burst;
+    boss->time_of_last_projectile = GetTime();
+  }
 
-      if (!CheckCollisionCircles(this_projectile->pos, this_projectile->size, this_enemy->pos, this_enemy->size))
-        continue;
-
-      this_projectile->is_active = false;
-      projectile_manager->projectile_count--;
-
-      // If we are not at the base enemy type, decay into the next type in the chain
-      if (this_enemy->type->turns_into) {
-        this_enemy->type = this_enemy->type->turns_into;
-        this_enemy->speed = get_random_float(this_enemy->type->min_speed, this_enemy->type->max_speed);
-      } else {  // Otherwise destroy the enemy
-        this_enemy->is_active = false;
-        enemy_manager->enemy_count--;
-      }
-
-      player->score++;
-      break;  // Exit the enemy loop so the projectile doesn't destroy a second enemy
-    }
+  if (boss->state == STATIONARY &&
+      GetTime() - boss->time_of_last_state_switch >= boss->boss_type->stationary_duration) {
+    boss->state = MOVING;
+    boss->time_of_last_state_switch = GetTime();
+    boss->desired_pos = player->pos;
   }
 }
+
+// If the boss is moving, update its position
+void boss_update_position(Boss *boss, Player *player) {
+  if (!boss->is_active) return;
+
+  // Check for the boss colliding with the player (even if the boss is stationary)
+  if (CheckCollisionCircles(boss->pos, boss->boss_type->size, player->pos, player->size)) {
+    boss->is_active = false;  // Deactivate the boss (not strictly necessary at the moment)
+    player->is_defeated = true;
+  }
+
+  if (boss->state != MOVING) return;
+
+  Vector2 normalised_move_direction = Vector2Normalize(Vector2Subtract(boss->desired_pos, boss->pos));
+  boss->pos =
+      Vector2Add(boss->pos, Vector2Scale(normalised_move_direction, boss->boss_type->speed * GetFrameTime()));
+}
+
+// Generate a new boss projectile that moves towards the player
+Projectile projectile_generate_from_boss(const Boss *boss, const Player *player) {
+  // TODO: Make projectiles spawn at the surface of the boss rather than the centre
+  return (Projectile){.pos = boss->pos,
+                      .dir = Vector2Normalize(Vector2Subtract(player->pos, boss->pos)),
+                      .is_active = true,
+                      .allegiance = ENEMIES,
+                      .speed = boss->boss_type->projectile_speed,
+                      .size = boss->boss_type->projectile_size,
+                      .colour = boss->boss_type->projectile_colour};
+}
+
+// If it is time to do so, fire projectiles at the player
+void boss_try_to_fire_projectile(Boss *boss, ProjectileManager *projectile_manager, const Player *player) {
+  // Note we can still fire while moving
+  if (!boss->is_active) return;
+  if (boss->shots_left_in_burst <= 0) return;
+  if (GetTime() - boss->time_of_last_projectile <= 1 / boss->boss_type->firerate) return;
+
+  projectile_manager_add_projectile(projectile_manager, projectile_generate_from_boss(boss, player));
+  boss->time_of_last_projectile = GetTime();
+  boss->shots_left_in_burst--;
+}
+
+void boss_check_for_defeat(Boss *boss, Player *player) {
+  if (!boss->is_defeated) return;
+  boss->is_defeated = false;
+  boss->is_active = false;
+  player->score += boss->boss_type->score_on_defeat;
+  player->boss_credits += boss->boss_type->boss_credits_on_defeat;
+  // TODO: Think more about this formula
+  boss->score_for_next_spawn = 2 * boss->boss_type->initial_score_to_spawn + player->score;
+
+  // TODO: Spawn boss death enemies
+}
+
 /*---------------------------------------------------------------------------------------------------------------*/
 
 /*---------------------*/
@@ -826,13 +993,21 @@ void draw_enemies(const EnemyManager *enemy_manager, Vector2 camera_position, co
     if (!this_enemy.is_active) continue;
 
     enemies_counted++;
+    if (!circle_is_on_screen(this_enemy.pos, this_enemy.size, camera_position, constants)) continue;
 
     Vector2 offset_position = Vector2Subtract(this_enemy.pos, camera_position);
-
-    if (circle_is_on_screen(this_enemy.pos, this_enemy.size, camera_position, constants))
-      DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
-                  get_draw_length_from_unit_length(this_enemy.size, constants), this_enemy.type->colour);
+    DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
+                get_draw_length_from_unit_length(this_enemy.size, constants), this_enemy.type->colour);
   }
+}
+
+void draw_boss(const Boss *boss, Vector2 camera_position, const Constants *constants) {
+  if (!boss->is_active) return;
+  if (!circle_is_on_screen(boss->pos, boss->boss_type->size, camera_position, constants)) return;
+
+  Vector2 offset_position = Vector2Subtract(boss->pos, camera_position);
+  DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
+              get_draw_length_from_unit_length(boss->boss_type->size, constants), boss->boss_type->colour);
 }
 
 // Draw the active projectiles to the canvas
@@ -844,12 +1019,11 @@ void draw_projectiles(const ProjectileManager *projectile_manager, Vector2 camer
     if (!this_projectile.is_active) continue;
 
     projectiles_counted++;
+    if (!circle_is_on_screen(this_projectile.pos, this_projectile.size, camera_position, constants)) continue;
 
     Vector2 offset_position = Vector2Subtract(this_projectile.pos, camera_position);
-
-    if (circle_is_on_screen(this_projectile.pos, this_projectile.size, camera_position, constants))
-      DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
-                  get_draw_length_from_unit_length(this_projectile.size, constants), this_projectile.colour);
+    DrawCircleV(get_draw_position_from_unit_position(offset_position, constants),
+                get_draw_length_from_unit_length(this_projectile.size, constants), this_projectile.colour);
   }
 }
 
@@ -968,31 +1142,65 @@ void draw_button(const Button *button, const Constants *constants) {
 }
 
 // Draw score (and other stats if debug text button was pressed)
-void draw_score_and_game_info(const Player *player, const EnemyManager *enemy_manager,
-                              const ProjectileManager *projectile_manager, const Constants *constants,
-                              bool show_debug_text) {
+void draw_game_info(const Player *player, const EnemyManager *enemy_manager,
+                    const ProjectileManager *projectile_manager, const Boss *boss, const Constants *constants,
+                    bool show_debug_text, bool player_invincible) {
   draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0.25, 0.25}, 0.4,
                      constants->font_spacing, constants->game_colours->black, ANCHOR_TOP_LEFT, constants);
 
-  if (show_debug_text) {
-    draw_text_anchored(constants->game_font,
-                       TextFormat("Enemy count: %2d/%d", enemy_manager->enemy_count, enemy_manager->capacity),
-                       (Vector2){0.25, 0.75}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
-                       ANCHOR_TOP_LEFT, constants);
+  if (!show_debug_text) return;
 
-    draw_text_anchored(
-        constants->game_font,
-        TextFormat("Projectile count: %2d/%d", projectile_manager->projectile_count, projectile_manager->capacity),
-        (Vector2){0.25, 1}, 0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT,
-        constants);
+  float y_pos = 0.75;            // Vertical position of debug text (to allow for easier insertion of new text)
+  float y_pos_increment = 0.25;  // Space between lines of debug text
 
-    float num_credits = enemy_manager_calculate_credits(enemy_manager, constants);
-    draw_text_anchored(constants->game_font, TextFormat("Credits: %5.2f", num_credits), (Vector2){0.25, 1.25},
-                       0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT, constants);
+  draw_text_anchored(constants->game_font, TextFormat("Player invincible: %d", player_invincible),
+                     (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
+                     ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
 
-    draw_text_anchored(constants->game_font, TextFormat("%d", GetFPS()), (Vector2){-0.25, 0.25}, 0.35,
-                       constants->font_spacing, constants->game_colours->green_2, ANCHOR_TOP_RIGHT, constants);
-  }
+  draw_text_anchored(constants->game_font,
+                     TextFormat("Enemy count: %2d/%d", enemy_manager->enemy_count, enemy_manager->capacity),
+                     (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
+                     ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(
+      constants->game_font,
+      TextFormat("Projectile count: %2d/%d", projectile_manager->projectile_count, projectile_manager->capacity),
+      (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT,
+      constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(constants->game_font,
+                     TextFormat("Credits: %5.2f", enemy_manager_calculate_credits(enemy_manager, constants)),
+                     (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
+                     ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(constants->game_font, TextFormat("Score for next boss: %d", boss->score_for_next_spawn),
+                     (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
+                     ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(constants->game_font, TextFormat("Boss active: %d", boss->is_active), (Vector2){0.25, y_pos},
+                     0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(constants->game_font, TextFormat("Boss stationary: %d", boss->state), (Vector2){0.25, y_pos},
+                     0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(constants->game_font, TextFormat("Boss health: %.1f", boss->health), (Vector2){0.25, y_pos},
+                     0.25, constants->font_spacing, constants->game_colours->grey_5, ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(constants->game_font, TextFormat("Boss shots left in burst: %d", boss->shots_left_in_burst),
+                     (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
+                     ANCHOR_TOP_LEFT, constants);
+  y_pos += y_pos_increment;
+
+  draw_text_anchored(constants->game_font, TextFormat("%d", GetFPS()), (Vector2){-0.25, 0.25}, 0.35,
+                     constants->font_spacing, constants->game_colours->green_2, ANCHOR_TOP_RIGHT, constants);
 }
 
 // Draw the text for the shop page
@@ -1170,6 +1378,22 @@ int main() {
                                     .max_size = 0.44,
                                     .colour = game_colours.pink_2,
                                     .turns_into = enemy_types + 3}};
+
+  const BossType red_boss = {.initial_score_to_spawn = 50,
+                             .max_health = 20,
+                             .speed = 5,
+                             .size = 2.5,
+                             .colour = game_colours.red_2,
+                             .firerate = 4,
+                             .shots_per_burst = 7,
+                             .projectile_speed = 6,
+                             .projectile_size = 0.2,
+                             .projectile_colour = game_colours.red_3,
+                             .moving_duration = 2,
+                             .stationary_duration = 2,
+                             .num_enemies_spawned_on_defeat = 4,
+                             .boss_credits_on_defeat = 3,
+                             .score_on_defeat = 20};
   /*-------------------------------------------------------------------------------------------------------------*/
 
   /*-------------------*/
@@ -1220,7 +1444,7 @@ int main() {
   button_end_screen_back.text = "GO BACK";
   /*-------------------------------------------------------------------------------------------------------------*/
 
-  SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+  SetConfigFlags(FLAG_WINDOW_RESIZABLE);  // Allow window resizing on Windows
   InitWindow(constants.initial_window_resolution.x, constants.initial_window_resolution.y, "Loop Shooter");
   SetTargetFPS(constants.target_fps);
 
@@ -1236,8 +1460,10 @@ int main() {
   Player player = {0};
   EnemyManager enemy_manager = {0};
   ProjectileManager projectile_manager = {0};
+  Boss boss = {.boss_type = &red_boss};
 
   Shop shop = {.money = 0,
+               .boss_credits = 0,
                .upgrades = {{100, 0.25, constants.player_base_firerate, &(player.firerate)},
                             {50, 0.3, constants.player_base_projectile_speed, &(player.projectile_speed)},
                             {30, 0.2, constants.player_base_projectile_size, &(player.projectile_size)}}};
@@ -1247,6 +1473,7 @@ int main() {
   Vector2 camera_position;
 
   bool show_debug_text = false;
+  bool player_invincible = false;
   GameScreen game_screen = GAME_SCREEN_START;
   /*-------------------------------------------------------------------------------------------------------------*/
 
@@ -1264,7 +1491,7 @@ int main() {
           button_start_screen_start.was_pressed = false;
 
           game_screen = GAME_SCREEN_GAME;
-          start_game(&player, &enemy_manager, &projectile_manager, &constants);
+          start_game(&player, &enemy_manager, &projectile_manager, &boss, &constants);
         }
 
         button_check_user_interaction(&button_start_screen_shop, &constants);
@@ -1282,23 +1509,34 @@ int main() {
       case GAME_SCREEN_GAME:
         player_update_position(&player, &constants);
         camera_update_position(&camera_position, &player, &constants);
-
-        player_try_to_spawn_projectile(&player, &projectile_manager, camera_position, &constants);
-        projectile_manager_check_for_collisions_with_enemies(&projectile_manager, &enemy_manager, &player);
-        projectile_manager_update_projectile_positions(&projectile_manager, camera_position, &constants);
+        player_try_to_fire_projectile(&player, &projectile_manager, camera_position, &constants);
 
         enemy_manager_try_to_spawn_enemies(&enemy_manager, enemy_types, &player, camera_position, &constants);
         enemy_manager_update_desired_positions(&enemy_manager, &player, &constants);
-        enemy_manager_update_enemy_positions(&enemy_manager);
+        enemy_manager_update_enemy_positions(&enemy_manager, &player);
 
-        if (enemy_manager_enemy_is_colliding_with_player(&enemy_manager, &player)) {
-          end_game(&player, &enemy_manager, &projectile_manager, &shop);
-          game_screen = GAME_SCREEN_END;
+        boss_try_to_spawn(&boss, &player, camera_position, &constants);
+        boss_try_to_switch_states(&boss, &player);
+        boss_update_position(&boss, &player);
+        boss_try_to_fire_projectile(&boss, &projectile_manager, &player);
+
+        projectile_manager_check_for_collisions(&projectile_manager, &enemy_manager, &player, &boss);
+        projectile_manager_update_projectile_positions(&projectile_manager, camera_position, &constants);
+
+        boss_check_for_defeat(&boss, &player);
+
+        // TODO: Put this in function
+        if (player.is_defeated) {
+          if (player_invincible) {
+            player.is_defeated = false;
+          } else {
+            end_game(&player, &enemy_manager, &projectile_manager, &shop);
+            game_screen = GAME_SCREEN_END;
+          }
         }
 
-        if (IsKeyPressed(KEY_B) && DEBUG >= 1) {
-          show_debug_text = !show_debug_text;
-        }
+        if (IsKeyPressed(KEY_B) && DEBUG >= 1) show_debug_text = !show_debug_text;
+        if (IsKeyPressed(KEY_I) && DEBUG >= 1) player_invincible = !player_invincible;
         break;
       /*---------------------------------------------------------------------------------------------------------*/
 
@@ -1366,9 +1604,11 @@ int main() {
           draw_background_squares(camera_position, &constants);
           draw_projectiles(&projectile_manager, camera_position, &constants);
           draw_enemies(&enemy_manager, camera_position, &constants);
+          draw_boss(&boss, camera_position, &constants);
           draw_player(&player, camera_position, &constants);
 
-          draw_score_and_game_info(&player, &enemy_manager, &projectile_manager, &constants, show_debug_text);
+          draw_game_info(&player, &enemy_manager, &projectile_manager, &boss, &constants, show_debug_text,
+                         player_invincible);
           break;
         /*-------------------------------------------------------------------------------------------------------*/
 
