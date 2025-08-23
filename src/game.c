@@ -899,9 +899,13 @@ void boss_update_position(Boss *boss, Player *player) {
 
 // Generate a new boss projectile that moves towards the player
 Projectile projectile_generate_from_boss(const Boss *boss, const Player *player) {
-  // TODO: Make projectiles spawn at the surface of the boss rather than the centre
-  return (Projectile){.pos = boss->pos,
-                      .dir = Vector2Normalize(Vector2Subtract(player->pos, boss->pos)),
+  // Spawn the projectile at the edge of the boss
+  Vector2 boss_to_player_norm = Vector2Normalize(Vector2Subtract(player->pos, boss->pos));
+  Vector2 position = Vector2Add(
+      boss->pos, Vector2Scale(boss_to_player_norm, boss->boss_type->size - boss->boss_type->projectile_size));
+
+  return (Projectile){.pos = position,
+                      .dir = boss_to_player_norm,
                       .is_active = true,
                       .allegiance = ENEMIES,
                       .speed = boss->boss_type->projectile_speed,
@@ -927,7 +931,7 @@ void boss_check_for_defeat(Boss *boss, Player *player) {
   boss->is_active = false;
   player->score += boss->boss_type->score_on_defeat;
   player->boss_points += boss->boss_type->boss_points_on_defeat;
-  // TODO: Think more about this formula
+  // Successive bosses take twice as many points to spawn (starting from when the previous boss is defeated)
   boss->score_for_next_spawn = 2 * boss->boss_type->initial_score_to_spawn + player->score;
 
   // TODO: Spawn boss death enemies
@@ -1568,8 +1572,10 @@ int main() {
           }
         }
 
+        // Debug keymaps
         if (IsKeyPressed(KEY_B) && DEBUG >= 1) show_debug_text = !show_debug_text;
         if (IsKeyPressed(KEY_I) && DEBUG >= 1) player.is_invincible = !player.is_invincible;
+        if (IsKeyPressed(KEY_P) && DEBUG >= 1) player.score += 50;
         break;
       /*---------------------------------------------------------------------------------------------------------*/
 
@@ -1594,6 +1600,7 @@ int main() {
           }
         }
 
+        // Debug keymap
         if (IsKeyPressed(KEY_M) && DEBUG >= 1) shop.money += 1000;
         break;
       /*---------------------------------------------------------------------------------------------------------*/
