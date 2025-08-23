@@ -101,22 +101,26 @@ typedef struct Constants {
 
   int initial_max_projectiles;  // Maximum number of projectiles. This number should not be reached
 
-  Font game_font;                  // Font used for in-game text
-  float font_spacing;              // Spacing of the in-game font
-  float background_square_size;    // Side length (in units) of the squares in the background of the game
-  Color background_square_colour;  // Colour of the squares in the background of the game
-  Color background_colour;         // Colour of the background of the game
+  Font game_font;                           // Font used for in-game text
+  float font_spacing;                       // Spacing of the in-game font
+  float background_square_size;             // Side length (in units) of the squares in the background of the game
+  Color background_square_colour;           // Colour of the squares in the background of the game
+  Color background_colour;                  // Colour of the background of the game
+  Color boss_health_bar_colour;             // Colour of the bar in the boss health bar
+  Color boss_health_bar_background_colour;  // Colour of the background in the boss health bar
+  unsigned char boss_health_bar_opacity;    // Opacity of the boss health bar (out of 256)
 } Constants;
 
 typedef struct Player {
   Vector2 pos;  // Current position of the player
 
-  float speed;       // Speed of the player's movement
-  float size;        // Radius of the player circle
-  Color colour;      // Colour of the player
-  int score;         // Score of the player in this game loop
-  int boss_credits;  // Boss credits aquired by the player this game loop
-  bool is_defeated;  // Whether the player is defeated and the game should end
+  float speed;         // Speed of the player's movement
+  float size;          // Radius of the player circle
+  Color colour;        // Colour of the player
+  int score;           // Score of the player in this game loop
+  int boss_points;     // Boss points aquired by the player this game loop
+  bool is_defeated;    // Whether the player is defeated and the game should end
+  bool is_invincible;  // Whether the player is invincible and cannot be defeated
 
   float firerate;                 // Firerate of the player's shots (shots per second)
   float projectile_speed;         // Speed at which the player's projectiles travel
@@ -125,7 +129,7 @@ typedef struct Player {
   float time_of_last_projectile;  // Time at which the most recent projectile was fired
 } Player;
 
-// TODO: Add boss credit upgrades
+// TODO: Add boss points upgrades
 typedef struct Upgrade {
   float cost;            // Cost of the next upgrade purchase
   float stat_increment;  // Increment of the stat being upgraded (as fraction of the base value)
@@ -136,7 +140,7 @@ typedef struct Upgrade {
 #define NUM_UPGRADES 3
 typedef struct Shop {
   int money;                       // Amount of money the player has
-  int boss_credits;                // Amount of boss credits the player has
+  int boss_points;                 // Amount of boss points the player has
   Upgrade upgrades[NUM_UPGRADES];  // Array of upgrades available in the shop
 } Shop;
 
@@ -178,7 +182,7 @@ typedef struct BossType {
   float stationary_duration;  // Duration of the stationary part of the boss's movement cycle (in seconds)
 
   int num_enemies_spawned_on_defeat;  // Number of enemies spawned when the boss is defeated
-  int boss_credits_on_defeat;         // Number of boss credits awarded to the player when the boss is defeated
+  int boss_points_on_defeat;          // Number of boss points awarded to the player when the boss is defeated
   int score_on_defeat;                // Number of points awarded to the player when the boss is defeated
 } BossType;
 
@@ -434,7 +438,7 @@ void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *
   float start_time = GetTime();
   player->pos = constants->player_start_pos;
   player->score = 0;
-  player->boss_credits = 0;
+  player->boss_points = 0;
   player->is_defeated = false;
   player->time_of_last_projectile = start_time;
 
@@ -459,7 +463,7 @@ void start_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *
 // Perform actions when this instance of the game ends
 void end_game(Player *player, EnemyManager *enemy_manager, ProjectileManager *projectile_manager, Shop *shop) {
   shop->money += player->score;
-  shop->boss_credits += player->boss_credits;
+  shop->boss_points += player->boss_points;
 }
 
 // Clean up game objects when the program ends
@@ -639,6 +643,8 @@ void player_try_to_fire_projectile(Player *player, ProjectileManager *projectile
 
   player->time_of_last_projectile = GetTime();
 }
+
+void player_check_for_defeat(Player *player, GameScreen game_screen) {}
 /*---------------------------------------------------------------------------------------------------------------*/
 
 /*------------------*/
@@ -920,7 +926,7 @@ void boss_check_for_defeat(Boss *boss, Player *player) {
   boss->is_defeated = false;
   boss->is_active = false;
   player->score += boss->boss_type->score_on_defeat;
-  player->boss_credits += boss->boss_type->boss_credits_on_defeat;
+  player->boss_points += boss->boss_type->boss_points_on_defeat;
   // TODO: Think more about this formula
   boss->score_for_next_spawn = 2 * boss->boss_type->initial_score_to_spawn + player->score;
 
@@ -1144,7 +1150,7 @@ void draw_button(const Button *button, const Constants *constants) {
 // Draw score (and other stats if debug text button was pressed)
 void draw_game_info(const Player *player, const EnemyManager *enemy_manager,
                     const ProjectileManager *projectile_manager, const Boss *boss, const Constants *constants,
-                    bool show_debug_text, bool player_invincible) {
+                    bool show_debug_text) {
   draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0.25, 0.25}, 0.4,
                      constants->font_spacing, constants->game_colours->black, ANCHOR_TOP_LEFT, constants);
 
@@ -1153,7 +1159,7 @@ void draw_game_info(const Player *player, const EnemyManager *enemy_manager,
   float y_pos = 0.75;            // Vertical position of debug text (to allow for easier insertion of new text)
   float y_pos_increment = 0.25;  // Space between lines of debug text
 
-  draw_text_anchored(constants->game_font, TextFormat("Player invincible: %d", player_invincible),
+  draw_text_anchored(constants->game_font, TextFormat("Player invincible: %d", player->is_invincible),
                      (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
                      ANCHOR_TOP_LEFT, constants);
   y_pos += y_pos_increment;
@@ -1172,7 +1178,7 @@ void draw_game_info(const Player *player, const EnemyManager *enemy_manager,
   y_pos += y_pos_increment;
 
   draw_text_anchored(constants->game_font,
-                     TextFormat("Credits: %5.2f", enemy_manager_calculate_credits(enemy_manager, constants)),
+                     TextFormat("Enemy credits: %5.2f", enemy_manager_calculate_credits(enemy_manager, constants)),
                      (Vector2){0.25, y_pos}, 0.25, constants->font_spacing, constants->game_colours->grey_5,
                      ANCHOR_TOP_LEFT, constants);
   y_pos += y_pos_increment;
@@ -1201,6 +1207,29 @@ void draw_game_info(const Player *player, const EnemyManager *enemy_manager,
 
   draw_text_anchored(constants->game_font, TextFormat("%d", GetFPS()), (Vector2){-0.25, 0.25}, 0.35,
                      constants->font_spacing, constants->game_colours->green_2, ANCHOR_TOP_RIGHT, constants);
+}
+
+void draw_boss_health_bar(const Boss *boss, const Constants *constants) {
+  if (!boss->is_active) return;
+
+  float health_fraction = boss->health / boss->boss_type->max_health;
+
+  Color health_colour = constants->boss_health_bar_colour;
+  Color background_colour = constants->boss_health_bar_background_colour;
+  health_colour.a = constants->boss_health_bar_opacity;
+  background_colour.a = constants->boss_health_bar_opacity;
+
+  float y_pos = -0.5;
+  float width = 14;
+  float height = 0.25;
+  // Health portion of the bar
+  draw_anchored_rectangle_v((Vector2){-0.5 * (1 - health_fraction) * width, y_pos},
+                            (Vector2){health_fraction * width, height}, health_colour, ANCHOR_BOTTOM_CENTRE,
+                            constants);
+  // Background portion of the bar
+  draw_anchored_rectangle_v((Vector2){0.5 * health_fraction * width, y_pos},
+                            (Vector2){(1 - health_fraction) * width, height}, background_colour,
+                            ANCHOR_BOTTOM_CENTRE, constants);
 }
 
 // Draw the text for the shop page
@@ -1272,36 +1301,38 @@ int main() {
   /*--------------------------*/
   /* Constants initialisation */
   /*-------------------------------------------------------------------------------------------------------------*/
-  GameColours game_colours = {.red_1 = GetColor(0xEF3939FF),
-                              .red_2 = GetColor(0xCB1A1AFF),
-                              .red_3 = GetColor(0x841616FF),
+  GameColours game_colours = {
+      .red_1 = GetColor(0xEF3939FF),
+      .red_2 = GetColor(0xCB1A1AFF),
+      .red_3 = GetColor(0x841616FF),
 
-                              .blue_1 = GetColor(0x7BE0F7FF),
-                              .blue_2 = GetColor(0x42A2E3FF),
-                              .blue_3 = GetColor(0x344CC6FF),
-                              .blue_4 = GetColor(0x2C257FFF),
+      .blue_1 = GetColor(0x7BE0F7FF),
+      .blue_2 = GetColor(0x42A2E3FF),
+      .blue_3 = GetColor(0x344CC6FF),
+      .blue_4 = GetColor(0x2C257FFF),
 
-                              .green_1 = GetColor(0xC9D844FF),
-                              .green_2 = GetColor(0x89B431FF),
-                              .green_3 = GetColor(0x38801DFF),
-                              .yellow_1 = GetColor(0xFFD92FFF),
-                              .yellow_2 = GetColor(0xDFB51CFF),
-                              .yellow_3 = GetColor(0xC48C13FF),
+      .green_1 = GetColor(0xC9D844FF),
+      .green_2 = GetColor(0x89B431FF),
+      .green_3 = GetColor(0x38801DFF),
+      .yellow_1 = GetColor(0xFFD92FFF),
+      .yellow_2 = GetColor(0xDFB51CFF),
+      .yellow_3 = GetColor(0xC48C13FF),
 
-                              .pink_1 = GetColor(0xF89EA9FF),
-                              .pink_2 = GetColor(0xF26273FF),
+      .pink_1 = GetColor(0xF89EA9FF),
+      .pink_2 = GetColor(0xF26273FF),
 
-                              .brown_1 = GetColor(0x7F4511FF),
-                              .brown_2 = GetColor(0x5C3208FF),
+      .brown_1 = GetColor(0x7F4511FF),
+      .brown_2 = GetColor(0x5C3208FF),
 
-                              .white = GetColor(0xF6F9FFFF),
-                              .grey_1 = GetColor(0xDDE1E9FF),
-                              .grey_2 = GetColor(0xBAC1CEFF),
-                              .grey_3 = GetColor(0x90959DFF),
-                              .grey_4 = GetColor(0x66696EFF),
-                              .grey_5 = GetColor(0x45474AFF),
-                              .grey_6 = GetColor(0x313133FF),
-                              .black = GetColor(0x1A1B1BFF)};
+      .white = GetColor(0xF6F9FFFF),
+      .grey_1 = GetColor(0xDDE1E9FF),
+      .grey_2 = GetColor(0xBAC1CEFF),
+      .grey_3 = GetColor(0x90959DFF),
+      .grey_4 = GetColor(0x66696EFF),
+      .grey_5 = GetColor(0x45474AFF),
+      .grey_6 = GetColor(0x313133FF),
+      .black = GetColor(0x1A1B1BFF),
+  };
 
   Constants constants = {.game_colours = &game_colours,
                          .initial_window_resolution = {1280, 720},
@@ -1341,7 +1372,10 @@ int main() {
                          .font_spacing = 2,
                          .background_square_size = 2,
                          .background_colour = game_colours.white,
-                         .background_square_colour = game_colours.grey_1};
+                         .background_square_colour = game_colours.grey_1,
+                         .boss_health_bar_colour = game_colours.red_3,
+                         .boss_health_bar_background_colour = game_colours.black,
+                         .boss_health_bar_opacity = 180};
 
   const EnemyType enemy_types[] = {{.credit_cost = 1,
                                     .min_speed = 2.5,
@@ -1392,7 +1426,7 @@ int main() {
                              .moving_duration = 2,
                              .stationary_duration = 2,
                              .num_enemies_spawned_on_defeat = 4,
-                             .boss_credits_on_defeat = 3,
+                             .boss_points_on_defeat = 3,
                              .score_on_defeat = 20};
   /*-------------------------------------------------------------------------------------------------------------*/
 
@@ -1463,7 +1497,7 @@ int main() {
   Boss boss = {.boss_type = &red_boss};
 
   Shop shop = {.money = 0,
-               .boss_credits = 0,
+               .boss_points = 0,
                .upgrades = {{100, 0.25, constants.player_base_firerate, &(player.firerate)},
                             {50, 0.3, constants.player_base_projectile_speed, &(player.projectile_speed)},
                             {30, 0.2, constants.player_base_projectile_size, &(player.projectile_size)}}};
@@ -1473,7 +1507,6 @@ int main() {
   Vector2 camera_position;
 
   bool show_debug_text = false;
-  bool player_invincible = false;
   GameScreen game_screen = GAME_SCREEN_START;
   /*-------------------------------------------------------------------------------------------------------------*/
 
@@ -1524,10 +1557,10 @@ int main() {
         projectile_manager_update_projectile_positions(&projectile_manager, camera_position, &constants);
 
         boss_check_for_defeat(&boss, &player);
+        player_check_for_defeat(&player, game_screen);
 
-        // TODO: Put this in function
         if (player.is_defeated) {
-          if (player_invincible) {
+          if (player.is_invincible) {
             player.is_defeated = false;
           } else {
             end_game(&player, &enemy_manager, &projectile_manager, &shop);
@@ -1536,7 +1569,7 @@ int main() {
         }
 
         if (IsKeyPressed(KEY_B) && DEBUG >= 1) show_debug_text = !show_debug_text;
-        if (IsKeyPressed(KEY_I) && DEBUG >= 1) player_invincible = !player_invincible;
+        if (IsKeyPressed(KEY_I) && DEBUG >= 1) player.is_invincible = !player.is_invincible;
         break;
       /*---------------------------------------------------------------------------------------------------------*/
 
@@ -1607,8 +1640,8 @@ int main() {
           draw_boss(&boss, camera_position, &constants);
           draw_player(&player, camera_position, &constants);
 
-          draw_game_info(&player, &enemy_manager, &projectile_manager, &boss, &constants, show_debug_text,
-                         player_invincible);
+          draw_game_info(&player, &enemy_manager, &projectile_manager, &boss, &constants, show_debug_text);
+          draw_boss_health_bar(&boss, &constants);
           break;
         /*-------------------------------------------------------------------------------------------------------*/
 
