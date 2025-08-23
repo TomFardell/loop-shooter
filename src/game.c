@@ -181,9 +181,10 @@ typedef struct BossType {
   float moving_duration;      // Duration of the moving part of the boss's movement cycle (in seconds)
   float stationary_duration;  // Duration of the stationary part of the boss's movement cycle (in seconds)
 
-  int num_enemies_spawned_on_defeat;  // Number of enemies spawned when the boss is defeated
-  int boss_points_on_defeat;          // Number of boss points awarded to the player when the boss is defeated
-  int score_on_defeat;                // Number of points awarded to the player when the boss is defeated
+  int num_enemies_spawned_on_defeat;              // Number of enemies spawned when the boss is defeated
+  const EnemyType *enemy_type_spawned_on_defeat;  // Type of enemy spawned when the boss is defeated
+  int boss_points_on_defeat;  // Number of boss points awarded to the player when the boss is defeated
+  int score_on_defeat;        // Number of points awarded to the player when the boss is defeated
 } BossType;
 
 typedef enum BossState { MOVING, STATIONARY } BossState;
@@ -693,15 +694,20 @@ Vector2 get_random_enemy_start_position(float enemy_size, Vector2 camera_positio
   }
 }
 
-// Randomly generate a new enemy
-Enemy enemy_generate(const EnemyType *enemy_type, const Player *player, Vector2 camera_position,
-                     const Constants *constants) {
-  Enemy enemy = {.desired_pos = player->pos,
+// Generate a new enemy with random speed and size, and zeroed position
+Enemy enemy_generate_at_origin(const EnemyType *enemy_type, const Player *player) {
+  return (Enemy){.pos = Vector2Zero(),
+                 .desired_pos = player->pos,
                  .is_active = true,
                  .speed = get_random_float(enemy_type->min_speed, enemy_type->max_speed),
                  .size = get_random_float(enemy_type->min_size, enemy_type->max_size),
                  .type = enemy_type};
+}
 
+// Generate a new enemy with random speed, size and offscreen position
+Enemy enemy_generate_offscreen(const EnemyType *enemy_type, const Player *player, Vector2 camera_position,
+                               const Constants *constants) {
+  Enemy enemy = enemy_generate_at_origin(enemy_type, player);
   enemy.pos = get_random_enemy_start_position(enemy.size, camera_position, constants);
 
   return enemy;
@@ -788,7 +794,8 @@ void enemy_manager_try_to_spawn_enemies(EnemyManager *enemy_manager, const Enemy
 
   // Add the enemies from the wave to the enemy manager
   for (int i = 0; i < wave_size; i++) {
-    Enemy this_enemy = enemy_generate(enemy_types + wave_enemy_types[i], player, camera_position, constants);
+    Enemy this_enemy =
+        enemy_generate_offscreen(enemy_types + wave_enemy_types[i], player, camera_position, constants);
     enemy_manager_add_enemy(enemy_manager, this_enemy);
   }
 
@@ -925,8 +932,10 @@ void boss_try_to_fire_projectile(Boss *boss, ProjectileManager *projectile_manag
   boss->shots_left_in_burst--;
 }
 
-void boss_check_for_defeat(Boss *boss, Player *player) {
+// If the boss is defeated, perform death actions
+void boss_check_for_defeat(Boss *boss, Player *player, EnemyManager *enemy_manager) {
   if (!boss->is_defeated) return;
+
   boss->is_defeated = false;
   boss->is_active = false;
   player->score += boss->boss_type->score_on_defeat;
@@ -934,7 +943,18 @@ void boss_check_for_defeat(Boss *boss, Player *player) {
   // Successive bosses take twice as many points to spawn (starting from when the previous boss is defeated)
   boss->score_for_next_spawn = 2 * boss->boss_type->initial_score_to_spawn + player->score;
 
-  // TODO: Spawn boss death enemies
+  for (int i = 0; i < boss->boss_type->num_enemies_spawned_on_defeat; i++) {
+    Enemy enemy = enemy_generate_at_origin(boss->boss_type->enemy_type_spawned_on_defeat, player);
+
+    // Position the enemy uniformly at random inside the boss
+    float max_radius = boss->boss_type->size - enemy.size;
+    assert((max_radius > 0) && "Boss should not be smaller than spawned enemies");
+    float radius = sqrtf(get_random_float(0, max_radius * max_radius));  // The sqrt ensures uniform distribution
+    float angle = get_random_float(0, 2 * PI);
+    enemy.pos = Vector2Add(boss->pos, (Vector2){radius * cosf(angle), radius * sinf(angle)});
+
+    enemy_manager_add_enemy(enemy_manager, enemy);
+  }
 }
 
 /*---------------------------------------------------------------------------------------------------------------*/
@@ -1430,6 +1450,7 @@ int main() {
                              .moving_duration = 2,
                              .stationary_duration = 2,
                              .num_enemies_spawned_on_defeat = 4,
+                             .enemy_type_spawned_on_defeat = enemy_types + 4,
                              .boss_points_on_defeat = 3,
                              .score_on_defeat = 20};
   /*-------------------------------------------------------------------------------------------------------------*/
@@ -1560,7 +1581,7 @@ int main() {
         projectile_manager_check_for_collisions(&projectile_manager, &enemy_manager, &player, &boss);
         projectile_manager_update_projectile_positions(&projectile_manager, camera_position, &constants);
 
-        boss_check_for_defeat(&boss, &player);
+        boss_check_for_defeat(&boss, &player, &enemy_manager);
         player_check_for_defeat(&player, game_screen);
 
         if (player.is_defeated) {
