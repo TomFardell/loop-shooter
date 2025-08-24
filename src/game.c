@@ -78,10 +78,11 @@ typedef struct Constants {
   float player_base_size;    // Initial radius of the player circle
   Color player_colour;       // Colour of the player circle
 
-  float player_base_firerate;          // Initial firerate of the player's shots (shots per second)
-  float player_base_projectile_speed;  // Initial speed at which the player's projectiles travel
-  float player_base_projectile_size;   // Initial size of the player's projectiles
-  Color player_projectile_colour;      // Colour of the player's projectiles
+  float player_base_firerate;           // Initial firerate of the player's shots (shots per second)
+  float player_base_projectile_speed;   // Initial speed at which the player's projectiles travel
+  float player_base_projectile_size;    // Initial size of the player's projectiles
+  float player_base_projectile_damage;  // Initial damage of the player's projectiles
+  Color player_projectile_colour;       // Colour of the player's projectiles
 
   float upgrade_cost_multiplier;  // Multiplier applied to the cost of successive upgrades in the shop
 
@@ -125,23 +126,25 @@ typedef struct Player {
   float firerate;                 // Firerate of the player's shots (shots per second)
   float projectile_speed;         // Speed at which the player's projectiles travel
   float projectile_size;          // Radius of the player's projectile circles
+  float projectile_damage;        // Damage of the player's projectiles
   Color projectile_colour;        // Colour of the player's projectiles
   float time_of_last_projectile;  // Time at which the most recent projectile was fired
 } Player;
 
-// TODO: Add boss points upgrades
+typedef enum UpgradeType { UPGRADE_TYPE_MONEY, UPGRADE_TYPE_BOSS_POINTS } UpgradeType;
 typedef struct Upgrade {
+  UpgradeType type;      // Currency used to purchase the upgrade
   float cost;            // Cost of the next upgrade purchase
   float stat_increment;  // Increment of the stat being upgraded (as fraction of the base value)
   float base_stat;       // Base value of the stat being upgraded
   float *stat;           // Pointer to the stat to adjust
 } Upgrade;
 
-#define NUM_UPGRADES 3
 typedef struct Shop {
-  int money;                       // Amount of money the player has
-  int boss_points;                 // Amount of boss points the player has
-  Upgrade upgrades[NUM_UPGRADES];  // Array of upgrades available in the shop
+  int money;          // Amount of money the player has
+  int boss_points;    // Amount of boss points the player has
+  Upgrade *upgrades;  // Array of upgrades available in the shop
+  int num_upgrades;   // Number of upgrades in the shop
 } Shop;
 
 typedef struct EnemyType {
@@ -187,7 +190,7 @@ typedef struct BossType {
   int score_on_defeat;        // Number of points awarded to the player when the boss is defeated
 } BossType;
 
-typedef enum BossState { MOVING, STATIONARY } BossState;
+typedef enum BossState { BOSS_STATE_MOVING, BOSS_STATE_STATIONARY } BossState;
 typedef struct Boss {
   Vector2 pos;               // Current position of the boss
   Vector2 desired_pos;       // Position that the boss will move towards
@@ -217,7 +220,7 @@ typedef struct EnemyManager {
   float time_of_last_update;  // Time of the last update of enemy positions
 } EnemyManager;
 
-typedef enum ProjectileAllegiance { PLAYER, ENEMIES } ProjectileAllegiance;
+typedef enum ProjectileAllegiance { ALLEGIANCE_PLAYER, ALLEGIANCE_ENEMIES } ProjectileAllegiance;
 typedef struct Projectile {
   Vector2 pos;                      // Current position of the projectile
   Vector2 dir;                      // Movement direction of the projectile. Should always be normalised
@@ -415,6 +418,7 @@ void initialise_game(Player *player, EnemyManager *enemy_manager, ProjectileMana
   player->firerate = constants->player_base_firerate;
   player->projectile_speed = constants->player_base_projectile_speed;
   player->projectile_size = constants->player_base_projectile_size;
+  player->projectile_damage = constants->player_base_projectile_damage;
   player->projectile_colour = constants->player_projectile_colour;
 
   enemy_manager->enemies = calloc(constants->initial_max_enemies, sizeof *(enemy_manager->enemies));
@@ -535,7 +539,7 @@ void projectile_manager_check_for_collisions(ProjectileManager *projectile_manag
     projectiles_counted++;
 
     switch (this_projectile->allegiance) {
-      case PLAYER:
+      case ALLEGIANCE_PLAYER:
         // Check for collisions with enemies
         for (int j = 0, enemies_counted = 0;
              j < enemy_manager->capacity && enemies_counted < enemy_manager->enemy_count; j++) {
@@ -551,16 +555,24 @@ void projectile_manager_check_for_collisions(ProjectileManager *projectile_manag
           this_projectile->is_active = false;
           projectile_manager->projectile_count--;
 
-          // If we are not at the base enemy type, decay into the next type in the chain
-          if (this_enemy->type->turns_into) {
-            this_enemy->type = this_enemy->type->turns_into;
-            this_enemy->speed = get_random_float(this_enemy->type->min_speed, this_enemy->type->max_speed);
-          } else {  // Otherwise destroy the enemy
-            this_enemy->is_active = false;
-            enemy_manager->enemy_count--;
+          // Decay the enemy type once for each full point of damage the player deals
+          float damage_remaining = player->projectile_damage;
+          while (damage_remaining >= 1) {
+            if (this_enemy->type->turns_into) {  // If the enemy is not at the base type, decay
+              this_enemy->type = this_enemy->type->turns_into;
+              this_enemy->speed = get_random_float(this_enemy->type->min_speed, this_enemy->type->max_speed);
+
+              damage_remaining--;
+              player->score++;
+            } else {  // Otherwise destroy the enemy
+              this_enemy->is_active = false;
+              enemy_manager->enemy_count--;
+
+              player->score++;
+              break;  // Don't deal any more damage to the enemy
+            }
           }
 
-          player->score++;
           break;  // Exit the enemy loop so the projectile doesn't destroy a second enemy
         }
 
@@ -572,19 +584,20 @@ void projectile_manager_check_for_collisions(ProjectileManager *projectile_manag
         this_projectile->is_active = false;
         projectile_manager->projectile_count--;
 
-        boss->health--;
+        boss->health -= player->projectile_damage;
         if (boss->health <= 0) {
           boss->is_defeated = true;
         }
 
         break;
-      case ENEMIES:
+      case ALLEGIANCE_ENEMIES:
         if (!CheckCollisionCircles(this_projectile->pos, this_projectile->size, player->pos, player->size)) break;
 
         player->is_defeated = true;
 
         this_projectile->is_active = false;
         projectile_manager->projectile_count--;
+        break;
     }
   }
 }
@@ -611,7 +624,7 @@ Projectile projectile_generate_from_player(const Player *player, Vector2 camera_
                                            const Constants *constants) {
   Projectile projectile = {.pos = player->pos,
                            .is_active = true,
-                           .allegiance = PLAYER,
+                           .allegiance = ALLEGIANCE_PLAYER,
                            .speed = player->projectile_speed,
                            .size = player->projectile_size,
                            .colour = player->projectile_colour};
@@ -872,16 +885,17 @@ void boss_try_to_spawn(Boss *boss, const Player *player, Vector2 camera_position
 void boss_try_to_switch_states(Boss *boss, const Player *player) {
   if (!boss->is_active) return;
 
-  if (boss->state == MOVING && GetTime() - boss->time_of_last_state_switch >= boss->boss_type->moving_duration) {
-    boss->state = STATIONARY;
+  if (boss->state == BOSS_STATE_MOVING &&
+      GetTime() - boss->time_of_last_state_switch >= boss->boss_type->moving_duration) {
+    boss->state = BOSS_STATE_STATIONARY;
     boss->time_of_last_state_switch = GetTime();
     boss->shots_left_in_burst = boss->boss_type->shots_per_burst;
     boss->time_of_last_projectile = GetTime();
   }
 
-  if (boss->state == STATIONARY &&
+  if (boss->state == BOSS_STATE_STATIONARY &&
       GetTime() - boss->time_of_last_state_switch >= boss->boss_type->stationary_duration) {
-    boss->state = MOVING;
+    boss->state = BOSS_STATE_MOVING;
     boss->time_of_last_state_switch = GetTime();
     boss->desired_pos = player->pos;
   }
@@ -897,7 +911,7 @@ void boss_update_position(Boss *boss, Player *player) {
     player->is_defeated = true;
   }
 
-  if (boss->state != MOVING) return;
+  if (boss->state != BOSS_STATE_MOVING) return;
 
   Vector2 normalised_move_direction = Vector2Normalize(Vector2Subtract(boss->desired_pos, boss->pos));
   boss->pos =
@@ -914,7 +928,7 @@ Projectile projectile_generate_from_boss(const Boss *boss, const Player *player)
   return (Projectile){.pos = position,
                       .dir = boss_to_player_norm,
                       .is_active = true,
-                      .allegiance = ENEMIES,
+                      .allegiance = ALLEGIANCE_ENEMIES,
                       .speed = boss->boss_type->projectile_speed,
                       .size = boss->boss_type->projectile_size,
                       .colour = boss->boss_type->projectile_colour};
@@ -996,11 +1010,22 @@ void button_check_user_interaction(Button *button, const Constants *constants) {
 // Check if the player can afford a given upgrade, purchasing it if they can
 void shop_try_to_purchase_upgrade(Shop *shop, Upgrade *upgrade, const Constants *constants) {
   int rounded_cost = lroundf(upgrade->cost);
-  if (shop->money < rounded_cost) return;
 
-  *(upgrade->stat) += upgrade->stat_increment * upgrade->base_stat;
-  upgrade->cost *= constants->upgrade_cost_multiplier;
-  shop->money -= rounded_cost;
+  int *balance;  // Pointer to the currency needed to purchase this upgrade
+  switch (upgrade->type) {
+    case UPGRADE_TYPE_MONEY:
+      balance = &shop->money;
+      break;
+    case UPGRADE_TYPE_BOSS_POINTS:
+      balance = &shop->boss_points;
+      break;
+  }
+
+  if (*balance < rounded_cost) return;
+
+  *balance -= rounded_cost;                                          // Deduct the upgrade cost
+  *(upgrade->stat) += upgrade->stat_increment * upgrade->base_stat;  // Increase the stat
+  upgrade->cost *= constants->upgrade_cost_multiplier;               // Set the next upgrade price
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
@@ -1177,10 +1202,13 @@ void draw_game_info(const Player *player, const EnemyManager *enemy_manager,
                     bool show_debug_text) {
   draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0.25, 0.25}, 0.4,
                      constants->font_spacing, constants->game_colours->black, ANCHOR_TOP_LEFT, constants);
+  draw_text_anchored(constants->game_font, TextFormat("Boss points: %d", player->boss_points),
+                     (Vector2){0.25, 0.65}, 0.4, constants->font_spacing, constants->game_colours->black,
+                     ANCHOR_TOP_LEFT, constants);
 
   if (!show_debug_text) return;
 
-  float y_pos = 0.75;            // Vertical position of debug text (to allow for easier insertion of new text)
+  float y_pos = 1.15;            // Vertical position of debug text (to allow for easier insertion of new text)
   float y_pos_increment = 0.25;  // Space between lines of debug text
 
   draw_text_anchored(constants->game_font, TextFormat("Player invincible: %d", player->is_invincible),
@@ -1258,8 +1286,10 @@ void draw_boss_health_bar(const Boss *boss, const Constants *constants) {
 
 // Draw the text for the shop page
 void draw_shop_text(const Shop *shop, const Player *player, const Constants *constants) {
-  draw_text_anchored(constants->game_font, TextFormat("$%d", shop->money), (Vector2){-0.5, 0.5}, 0.4,
+  draw_text_anchored(constants->game_font, TextFormat("%d $", shop->money), (Vector2){-0.5, 0.3}, 0.4,
                      constants->font_spacing, constants->game_colours->yellow_3, ANCHOR_TOP_RIGHT, constants);
+  draw_text_anchored(constants->game_font, TextFormat("%d BP", shop->boss_points), (Vector2){-0.5, 0.8}, 0.4,
+                     constants->font_spacing, constants->game_colours->red_3, ANCHOR_TOP_RIGHT, constants);
 
   Upgrade upgrade_firerate = shop->upgrades[0];
   draw_text_anchored(constants->game_font, "Firerate", (Vector2){1.25, 0.5}, 0.4, constants->font_spacing,
@@ -1290,26 +1320,35 @@ void draw_shop_text(const Shop *shop, const Player *player, const Constants *con
                                                               constants->player_base_projectile_size),
                      (Vector2){1.25, 2.9}, 0.3, constants->font_spacing, constants->game_colours->grey_4,
                      ANCHOR_TOP_LEFT, constants);
+
+  Upgrade upgrade_projectile_damage = shop->upgrades[3];
+  draw_text_anchored(constants->game_font, "Projectile damage", (Vector2){7.5, 0.5}, 0.4, constants->font_spacing,
+                     constants->game_colours->grey_6, ANCHOR_TOP_LEFT, constants);
+  draw_text_anchored(constants->game_font,
+                     TextFormat("%.1f -> %.1f", player->projectile_damage,
+                                player->projectile_damage + upgrade_projectile_damage.stat_increment *
+                                                                constants->player_base_projectile_damage),
+                     (Vector2){7.5, 0.9}, 0.3, constants->font_spacing, constants->game_colours->grey_4,
+                     ANCHOR_TOP_LEFT, constants);
 }
 
 // Update text for and draw purchase buttons in the shop screen
 void draw_shop_purchase_buttons(Button *buttons_shop_purchase, const Shop *shop, const Constants *constants) {
-  Button *button_purchase_firerate = buttons_shop_purchase;
-  Button *button_purchase_projectile_speed = buttons_shop_purchase + 1;
-  Button *button_purchase_projectile_size = buttons_shop_purchase + 2;
+  for (int i = 0; i < shop->num_upgrades; i++) {
+    Button *button = buttons_shop_purchase + i;
+    Upgrade upgrade = shop->upgrades[i];
 
-  // TextFormat results decay after TextFormat is called 4 times, so need to update this text here
-  Upgrade upgrade_firerate = shop->upgrades[0];
-  button_purchase_firerate->text = TextFormat("$%d", lroundf(upgrade_firerate.cost));
-  draw_button(button_purchase_firerate, constants);
+    switch (upgrade.type) {
+      case UPGRADE_TYPE_MONEY:
+        button->text = TextFormat("$%d", lroundf(upgrade.cost));
+        break;
+      case UPGRADE_TYPE_BOSS_POINTS:
+        button->text = TextFormat("%d BP", lroundf(upgrade.cost));
+        break;
+    }
 
-  Upgrade upgrade_projectile_speed = shop->upgrades[1];
-  button_purchase_projectile_speed->text = TextFormat("$%d", lroundf(upgrade_projectile_speed.cost));
-  draw_button(button_purchase_projectile_speed, constants);
-
-  Upgrade upgrade_projectile_size = shop->upgrades[2];
-  button_purchase_projectile_size->text = TextFormat("$%d", lroundf(upgrade_projectile_size.cost));
-  draw_button(button_purchase_projectile_size, constants);
+    draw_button(button, constants);
+  }
 }
 
 // Draw the text in the game over screen
@@ -1318,6 +1357,8 @@ void draw_game_over_text(const Player *player, const Constants *constants) {
                      constants->game_colours->red_2, ANCHOR_CENTRE, constants);
   draw_text_anchored(constants->game_font, TextFormat("Score: %d", player->score), (Vector2){0, -2}, 0.5,
                      constants->font_spacing, constants->game_colours->black, ANCHOR_CENTRE, constants);
+  draw_text_anchored(constants->game_font, TextFormat("Boss points: %d", player->boss_points), (Vector2){0, -1.3},
+                     0.5, constants->font_spacing, constants->game_colours->black, ANCHOR_CENTRE, constants);
 }
 /*---------------------------------------------------------------------------------------------------------------*/
 
@@ -1373,6 +1414,7 @@ int main() {
                          .player_base_firerate = 2,
                          .player_base_projectile_speed = 8,
                          .player_base_projectile_size = 0.12,
+                         .player_base_projectile_damage = 1.0,
                          .player_projectile_colour = game_colours.grey_5,
 
                          .upgrade_cost_multiplier = 1.5,
@@ -1467,13 +1509,14 @@ int main() {
                                       .text_colour = game_colours.black,
                                       .font_size = 0.6};
 
-  // It is convenient for me to create some buttons by simply copying a previous button and changing some values
-  Button button_start_screen_shop = button_start_screen_start;
-  button_start_screen_shop.bounds.y += 2.5;
-  button_start_screen_shop.text = "SHOP";
-  button_start_screen_shop.body_colour_default = game_colours.yellow_1;
-  button_start_screen_shop.body_colour_hover = game_colours.yellow_2;
-  button_start_screen_shop.body_colour_pressed = game_colours.yellow_3;
+  Button button_start_screen_shop = {.bounds = {0, 1.5, 3, 1.2},
+                                     .anchor_type = ANCHOR_CENTRE,
+                                     .text = "SHOP",
+                                     .body_colour_default = game_colours.yellow_1,
+                                     .body_colour_hover = game_colours.yellow_2,
+                                     .body_colour_pressed = game_colours.yellow_3,
+                                     .text_colour = game_colours.black,
+                                     .font_size = 0.6};
 
   Button button_shop_screen_back = {.bounds = {0.25, -0.25, 1.2, 0.5},
                                     .anchor_type = ANCHOR_BOTTOM_LEFT,
@@ -1484,23 +1527,47 @@ int main() {
                                     .text_colour = game_colours.black,
                                     .font_size = 0.28};
 
-  // The first purchase button is created manually, and the others are identical but shifted down
-  Button buttons_shop_purchase[NUM_UPGRADES] = {{.bounds = {0.18, 0.58, 0.94, 0.5},
-                                                 .anchor_type = ANCHOR_TOP_LEFT,
-                                                 .text = "price",
-                                                 .body_colour_default = game_colours.green_1,
-                                                 .body_colour_hover = game_colours.green_2,
-                                                 .body_colour_pressed = game_colours.green_3,
-                                                 .text_colour = game_colours.black,
-                                                 .font_size = 0.25}};
-  buttons_shop_purchase[1] = buttons_shop_purchase[0];
-  buttons_shop_purchase[1].bounds.y += 1;
-  buttons_shop_purchase[2] = buttons_shop_purchase[1];
-  buttons_shop_purchase[2].bounds.y += 1;
+  Button buttons_shop_purchase[] = {{.bounds = {0.18, 0.58, 0.94, 0.5},
+                                     .anchor_type = ANCHOR_TOP_LEFT,
+                                     .text = "NULL",
+                                     .body_colour_default = game_colours.green_1,
+                                     .body_colour_hover = game_colours.green_2,
+                                     .body_colour_pressed = game_colours.green_3,
+                                     .text_colour = game_colours.black,
+                                     .font_size = 0.25},
+                                    {.bounds = {0.18, 1.58, 0.94, 0.5},
+                                     .anchor_type = ANCHOR_TOP_LEFT,
+                                     .text = "NULL",
+                                     .body_colour_default = game_colours.green_1,
+                                     .body_colour_hover = game_colours.green_2,
+                                     .body_colour_pressed = game_colours.green_3,
+                                     .text_colour = game_colours.black,
+                                     .font_size = 0.25},
+                                    {.bounds = {0.18, 2.58, 0.94, 0.5},
+                                     .anchor_type = ANCHOR_TOP_LEFT,
+                                     .text = "NULL",
+                                     .body_colour_default = game_colours.green_1,
+                                     .body_colour_hover = game_colours.green_2,
+                                     .body_colour_pressed = game_colours.green_3,
+                                     .text_colour = game_colours.black,
+                                     .font_size = 0.25},
+                                    {.bounds = {6.43, 0.58, 0.94, 0.5},
+                                     .anchor_type = ANCHOR_TOP_LEFT,
+                                     .text = "NULL",
+                                     .body_colour_default = game_colours.green_1,
+                                     .body_colour_hover = game_colours.green_2,
+                                     .body_colour_pressed = game_colours.green_3,
+                                     .text_colour = game_colours.black,
+                                     .font_size = 0.25}};
 
-  Button button_end_screen_back = button_start_screen_start;
-  button_end_screen_back.bounds.y += 2.5;
-  button_end_screen_back.text = "GO BACK";
+  Button button_end_screen_back = {.bounds = {0, 1.5, 3, 1.2},
+                                   .anchor_type = ANCHOR_CENTRE,
+                                   .text = "GO BACK",
+                                   .body_colour_default = game_colours.green_1,
+                                   .body_colour_hover = game_colours.green_2,
+                                   .body_colour_pressed = game_colours.green_3,
+                                   .text_colour = game_colours.black,
+                                   .font_size = 0.6};
   /*-------------------------------------------------------------------------------------------------------------*/
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE);  // Allow window resizing on Windows
@@ -1521,11 +1588,15 @@ int main() {
   ProjectileManager projectile_manager = {0};
   Boss boss = {.boss_type = &red_boss};
 
+  Upgrade shop_upgrades[] = {
+      {UPGRADE_TYPE_MONEY, 100, 0.25, constants.player_base_firerate, &player.firerate},
+      {UPGRADE_TYPE_MONEY, 50, 0.3, constants.player_base_projectile_speed, &player.projectile_speed},
+      {UPGRADE_TYPE_MONEY, 30, 0.2, constants.player_base_projectile_size, &player.projectile_size},
+      {UPGRADE_TYPE_BOSS_POINTS, 3, 0.5, constants.player_base_projectile_damage, &player.projectile_damage}};
   Shop shop = {.money = 0,
                .boss_points = 0,
-               .upgrades = {{100, 0.25, constants.player_base_firerate, &(player.firerate)},
-                            {50, 0.3, constants.player_base_projectile_speed, &(player.projectile_speed)},
-                            {30, 0.2, constants.player_base_projectile_size, &(player.projectile_size)}}};
+               .upgrades = shop_upgrades,
+               .num_upgrades = sizeof shop_upgrades / sizeof *shop_upgrades};
 
   initialise_game(&player, &enemy_manager, &projectile_manager, &constants);
 
@@ -1611,7 +1682,7 @@ int main() {
           game_screen = GAME_SCREEN_START;
         }
 
-        for (int i = 0; i < NUM_UPGRADES; i++) {
+        for (int i = 0; i < shop.num_upgrades; i++) {
           Button *this_purchase_button = buttons_shop_purchase + i;
           button_check_user_interaction(this_purchase_button, &constants);
           if (this_purchase_button->was_pressed) {
@@ -1621,8 +1692,9 @@ int main() {
           }
         }
 
-        // Debug keymap
+        // Debug keymaps
         if (IsKeyPressed(KEY_M) && DEBUG >= 1) shop.money += 1000;
+        if (IsKeyPressed(KEY_B) && DEBUG >= 1) shop.boss_points += 50;
         break;
       /*---------------------------------------------------------------------------------------------------------*/
 
