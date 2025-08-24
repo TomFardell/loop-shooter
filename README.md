@@ -1,6 +1,6 @@
 # Loop Shooter
 
-Simple game made in C with [raylib](https://github.com/raysan5/raylib). Currently no artwork or sounds, as I am mainly just trying to learn games programming.
+Simple game made in C with [raylib](https://github.com/raysan5/raylib). Currently no artwork or sounds; I am focused on coding for now.
 
 ![screenshot](https://i.imgur.com/bMWe3Pu.png)
 
@@ -16,9 +16,13 @@ The game can be built using [CMake](https://cmake.org/download/). There are Debu
 
 - **Debug**
     - Generates debug information (`-g`) and sets `DEBUG` flag in the code
-    - Press `B` during gameplay to show debug UI
-    - Press `M` in shop to add $1000
     - Compiler optimisations disabled
+    - Extra keybinds:
+        - Press `B` during gameplay to show debug UI
+        - Press `I` during gameplay to make the player invincible
+        - Press `P` during gameplay to add 50 points
+        - Press `M` in the shop to add $1000
+        - Press `B` in the shop to add 50 boss points
 - **Release**
     - Compiler optimisations set to level 2
 
