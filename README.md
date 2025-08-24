@@ -2,7 +2,7 @@
 
 Simple game made in C with [raylib](https://github.com/raysan5/raylib). Currently no artwork or sounds, as I am mainly just trying to learn games programming.
 
-![screenshot](https://i.imgur.com/UkTbvJo.png)
+![screenshot](https://i.imgur.com/bMWe3Pu.png)
 
 ## Features
 
